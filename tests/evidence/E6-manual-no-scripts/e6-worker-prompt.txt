@@ -1,0 +1,6 @@
+Use Looper for this task. Looper is at C:\Projects\Looper-Test\looper-noscripts - read its prompts\worker.md.
+This copy of Looper has NO helper scripts and no drivers: follow docs\contract.md by hand for creating the task folder and publishing.
+
+Task: in the git repo C:\Projects\Looper-Test\manual, change greeting.txt so it reads "hello looper" and commit locally (no push).
+
+Put the task folder at C:\Projects\Looper-Test\manual\.looper. You are running headless: once your handoff for the reviewer is published, stop. Someone will wake you again later.

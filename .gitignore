@@ -1,0 +1,4 @@
+# Generated skill package (build with integrations/skill/build.ps1)
+/dist/
+# A Looper task folder used to dogfood Looper on itself
+/.looper/

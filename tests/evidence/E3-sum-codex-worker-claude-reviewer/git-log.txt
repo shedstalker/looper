@@ -1,0 +1,3 @@
+2ab1215 Fix off-by-one in sum.ps1 (worker's change, committed by the human: worker sandbox cannot write .git)
+6e57ef3 Add sum.ps1
+01c610a Numbers

@@ -1,0 +1,1 @@
+You are the REVIEWER for the Looper task at C:\Projects\Looper-Test\manual\.looper. Read C:\Projects\Looper-Test\manual\.looper\CONTEXT.md and follow the reviewer route.

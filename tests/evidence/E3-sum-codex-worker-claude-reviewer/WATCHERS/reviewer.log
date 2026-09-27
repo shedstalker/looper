@@ -1,0 +1,8 @@
+2026-09-27T13:44:17 reviewer driver started: C:\Users\<user>\.local\bin\claude.exe (pid 25864)
+2026-09-27T13:44:18 reviewer attempt start - handoff 001 eead2def7801
+2026-09-27T13:45:44 reviewer attempt published (exit 0) - NEXT: worker
+2026-09-27T13:47:39 reviewer attempt start - handoff 002 c076f398b5fc
+2026-09-27T13:50:21 reviewer attempt published (exit 0) - NEXT: worker
+2026-09-27T13:54:54 reviewer attempt start - handoff 003 9736055fa2df
+2026-09-27T13:57:29 reviewer attempt published (exit 0) - NEXT: done
+2026-09-27T13:57:29 reviewer task done; driver exiting

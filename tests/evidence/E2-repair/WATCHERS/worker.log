@@ -1,0 +1,4 @@
+2026-09-27T13:42:11 worker driver started: C:\Users\<user>\.local\bin\claude.exe (pid 26660)
+2026-09-27T13:43:12 worker attempt start - handoff 001 91ee0e0e9305
+2026-09-27T13:44:35 worker attempt published (exit 0) - NEXT: reviewer
+2026-09-27T13:46:16 worker task done; driver exiting
