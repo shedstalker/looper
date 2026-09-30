@@ -58,9 +58,14 @@ known_list() {
     sort -n "$T/known.u" > "$T/known"
 }
 
+# Parsing ignores one leading UTF-8 byte order mark (Windows PowerShell 5.1 writes one), as
+# looper.ps1 does; hashes always use the exact bytes.
+BOM=$(printf '\357\273\277')
+
 # Soft format: "Verdict: PASS", "**Verdict:** repair", or a Verdict heading with the word below it.
 verdict() {
-    awk '
+    awk -v bom="$BOM" '
+    NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) }
     function word(s) {
         if (s ~ /^pass([^a-z0-9_]|$)/) return "PASS"
         if (s ~ /^repair([^a-z0-9_]|$)/) return "REPAIR"
@@ -76,11 +81,17 @@ verdict() {
     }' "$1"
 }
 
+# report_sha FILE: the final report's hash the handoff names (the last such line), or nothing.
+report_sha() {
+    sed "1s/^$BOM//" "$1" | sed -n 's/^Final report: `FINAL_REPORT\.md`, sha256 \([0-9a-f]\{64\}\)[[:space:]]*$/\1/p' | tail -n 1
+}
+
 # Hash prefixes on lines whose label (text before the first colon) says "handoff" but not
 # previous/prior/earlier/old/last. Printed lower-case, one per line.
 handoff_tokens() {
-    awk '
+    awk -v bom="$BOM" '
     function wc(c) { return c ~ /[A-Za-z0-9_]/ }
+    NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) }
     {
         sub(/\r$/, "")
         c = index($0, ":"); if (c == 0) next
@@ -124,13 +135,19 @@ state() {
         [ "$BIND" = ambiguous ] || RFOR=$BIND
     fi
     note f "$FINAL" && FINAL_OK=yes
+    # The final report the handoff names (publish adds the line when the report is written).
+    NAMED=''
+    [ -n "$H" ] && NAMED=$(report_sha "$T/h")
     if [ -z "$H" ]; then
         NEXT=worker; WHY='no handoff published yet'
     elif [ -z "$RFOR" ] || [ "$RFOR" != "$H" ]; then
         NEXT=reviewer; WHY="handoff $HNUM $HSHORT has no applicable review"
-    elif [ "$VERDICT" = PASS ] && [ -n "$FINAL_OK" ] && ! [ "$T/f" -nt "$T/h" ]; then
-        # Done only when the report existed before the handoff that passed, i.e. it was reviewed.
+    elif [ "$VERDICT" = PASS ] && [ -n "$FINAL_OK" ] && if [ -n "$NAMED" ]; then [ "$(sha "$T/f")" = "$NAMED" ]; else ! [ "$T/f" -nt "$T/h" ]; fi; then
+        # Done only when the passing handoff covered this exact report, i.e. it was reviewed. The
+        # handoff names the report's hash; older or hand-written ones fall back to write times.
         NEXT=done; WHY="handoff $HNUM passed and FINAL_REPORT.md is written"
+    elif [ "$VERDICT" = PASS ] && [ -n "$FINAL_OK" ] && [ -n "$NAMED" ]; then
+        NEXT=worker; WHY="FINAL_REPORT.md changed after handoff $HNUM named it; publish a new final handoff"
     else
         NEXT=worker; WHY="answer (${VERDICT:-no verdict}) published for handoff $HNUM $HSHORT"
     fi
@@ -203,6 +220,12 @@ cmd_publish() {
     if [ -n "$ATTACH" ]; then
         [ "$KIND" = handoff ] || die '-Attach is for handoffs only.'
         attach_files
+    fi
+    if [ "$KIND" = handoff ] && note f "$FINAL" && [ -z "$(report_sha "$T/d")" ]; then
+        # A written final report is bound by content: its hash becomes part of the handoff, so "done"
+        # never depends on write times (git clones and plain copies do not keep them).
+        [ -z "$(tail -c 1 "$T/d")" ] || printf '\n' >> "$T/d"
+        printf '\nFinal report: `FINAL_REPORT.md`, sha256 %s\n' "$(sha "$T/f")" >> "$T/d"
     fi
     D=$(sha "$T/d"); DSHORT=$(printf '%.12s' "$D")
     known_list

@@ -18,6 +18,25 @@ re-invokes the session with its output. Exit 3 is a quiet timeout (default 12 h)
 again. No model calls while waiting. A replaced session only needs:
 `Continue the Looper task at <folder> as the WORKER - read its CONTEXT.md.`
 
+### Permissions: cover every task folder before you start
+
+Claude Code, not the model, decides which commands run. If the session works in auto mode or
+with an allow-list, set it up once for Looper:
+- **Folders:** `permissions.additionalDirectories` (or `--add-dir`) for every folder the session
+  and its subagents will use. That means every task folder, not only the first. A parent folder
+  holding all task folders is simplest.
+- **Commands, with an allow-list:** allow rules for the helper and any driver it starts (for
+  example `Bash(pwsh *)`, `Bash(sh *)` or the `PowerShell` tool).
+- **Commands, in auto mode:** broad interpreter rules like those are set aside, and the classifier
+  decides each command. Add a plain-language line to `autoMode.environment` saying that running
+  the Looper helper and drivers on those task folders is intended.
+
+Subagents inherit the session's rules, so one entry covers them. Claude Code reloads permission
+edits in a running session, so no restart is needed. An agent must not widen its own permissions:
+when Claude Code refuses a Looper command, the agent stops and asks you. (From real use: lanes
+run by subagents on their own task folders were refused until the owner's settings named those
+folders too.)
+
 ## Worker or reviewer - headless
 
 ```powershell

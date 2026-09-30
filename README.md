@@ -66,7 +66,9 @@ and PowerShell; macOS/Linux is shown after the steps.
 
    It creates `.looper/` in your project, fills PLAN and TASK, starts work, and gives you a
    one-line prompt for the second agent. (With the [Agent Skill](#as-an-agent-skill) installed,
-   "Use Looper for this task: ..." is enough.)
+   "Use Looper for this task: ..." is enough.) If your agent runs with an allow-list or in an
+   auto mode, allow the Looper helper and drivers for every task folder it will use. For Claude
+   Code, see [Permissions](drivers/claude-code/README.md#permissions-cover-every-task-folder-before-you-start).
 
 3. **Give the second agent that line.** How long it keeps going depends on how you run it:
    - **Manually prompted** (any agent): it answers the request that is due now and stops. Give it
@@ -88,6 +90,11 @@ and PowerShell; macOS/Linux is shown after the steps.
      models and other providers). Drivers need PowerShell 7 (`pwsh`). [Pick a
      runtime](drivers/README.md#pick-a-runtime) shows which models have actually passed a
      Looper handoff, plus sign-in, cost and permission boundaries.
+
+     *Codex as the worker (builder) on Windows:* its sandbox cannot start the Microsoft Store
+     PowerShell 7 or commit to your project's repository. To let it prove work on PowerShell 7, unpack the official PowerShell
+     zip to a folder like `C:\Tools\PowerShell\7` and tell the worker that path. Plan for you
+     or another agent to commit its drafts. [Details](drivers/codex/README.md#worker---headless).
 
 4. **Check progress** at any time. `status` only reads the files and prints whose move it is
    (`NEXT: worker`, `reviewer` or `done`); it never starts an agent:
@@ -126,7 +133,7 @@ counts the second.
 | **OpenCode** | Grok, as reviewer and worker (`xai/grok-4.7` requested with a SuperGrok sign-in; OpenCode does not report the model that answered); Qwen through Ollama (one review) | Gemini, and everything else `opencode models` lists |
 | Any other agent | not tested; the by-hand protocol it would follow was tested with all scripts removed (Claude and Codex) | its own |
 
-- **Checks without models:** 50 acceptance checks. Every check that applies passes on Windows
+- **Checks without models:** 53 acceptance checks. Every check that applies passes on Windows
   (PowerShell 7 and 5.1, Git Bash `sh`) and Linux (Docker: `pwsh`, `dash`); a few are
   platform-specific and skip elsewhere ([details](docs/testing.md#deterministic-suite---testsacceptanceps1)).
 - **Live runs:** real, separate agents answering real handoffs, including repairs, crashes,
@@ -191,6 +198,9 @@ More in [docs/history.md](docs/history.md): origins, lineage and the lessons beh
   files outside Git, fixes found in real use, current model guidance.
 - **v0.3.1 - Level 1 Deluxe**: fixes from an outside review (git worktrees, the Skill build's
   output guard) and a Quick start note on cloud-synced folders.
+- **v0.4.0 - Level 1 Deluxe**: `done` checks the final report by its hash, not file times, so it
+  holds after a clone or copy. Also a Linux driver fix, and setup guidance for Codex builders and
+  agent permissions.
 
 Nothing beyond Level 1 is implemented here. What each version delivered: [CHANGELOG.md](CHANGELOG.md).
 

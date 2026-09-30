@@ -65,4 +65,6 @@ verdict only if it helps (e.g. BLOCKED when you could not do it).
 ## Final review
 
 When the worker asks for the final review, check the whole outcome against PLAN, and check
-that `FINAL_REPORT.md` is accurate against TASK, HISTORY and the actual final state.
+that `FINAL_REPORT.md` is accurate against TASK, HISTORY and the actual final state. The handoff's
+`Final report:` line names the report's SHA-256. If the report no longer matches it, say so: you
+would be reviewing a different report.

@@ -103,9 +103,15 @@ function Show-New([hashtable]$Seen) {
 
 function Invoke-Child([string[]]$ArgList) {
     # One run of the agent CLI; returns its exit code (or 'killed'). Output goes to WATCHERS files.
-    $proc = Start-Process -FilePath $Exe -ArgumentList (($ArgList | ForEach-Object { Format-Argument $_ }) -join ' ') `
-        -WorkingDirectory $cwd -RedirectStandardInput $promptFile -RedirectStandardOutput $outFile `
-        -RedirectStandardError $errFile -NoNewWindow -PassThru
+    $file = $Exe; $argv = $ArgList; $stdin = @{ RedirectStandardInput = $promptFile }
+    if ($env:OS -ne 'Windows_NT') {
+        # Elsewhere Start-Process copies the prompt through a pipe, and an agent that exits without
+        # reading it (e.g. on a sign-in error) makes it throw "Broken pipe". Let sh open the file.
+        $file = '/bin/sh'; $stdin = @{}
+        $argv = @('-c', ('exec "$0" "$@" < ''' + $promptFile.Replace("'", "'\''") + "'"), $Exe) + $ArgList
+    }
+    $proc = Start-Process -FilePath $file -ArgumentList (($argv | ForEach-Object { Format-Argument $_ }) -join ' ') `
+        -WorkingDirectory $cwd -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru @stdin
     $null = $proc.Handle   # keeps ExitCode readable on Windows PowerShell 5.1
     $deadline = [DateTime]::UtcNow.AddMinutes($AttemptTimeoutMinutes)
     $seen = @{ $outFile = 0L; $errFile = 0L }

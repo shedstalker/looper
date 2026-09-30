@@ -7,6 +7,49 @@ Looper was developed privately through v0.1.0 and v0.2.0. **Public distribution 
 v0.2.1**; the entries below v0.2.1 describe that development lineage, not earlier releases of the
 public repository.
 
+## v0.4.0 - Level 1 Deluxe
+
+The final report is now bound by hash, which changes how `done` is decided (backward
+compatible). Plus fixes from an outside run on Linux, and setup guidance for Codex builders and
+for agent permissions.
+
+- Codex as a builder on Windows (tested; E20). The Codex driver README and README Quick start
+  cover the setup:
+  - PowerShell 7 works from the official zip in a folder the sandbox accounts can read (on the
+    tested machine, `C:\Tools\PowerShell\7`). It does not work from the Store, nor from
+    `%LOCALAPPDATA%\Programs` on the tested machine, because the sandbox runs as separate accounts.
+  - Network is off by default. With network access on, `localhost` answered, but one HTTPS
+    request failed. `wsl` is refused. The finisher runs proofs the sandbox cannot.
+  - Commits to the project's existing repository are refused, so the recommended route is
+    "Codex drafts, a finisher commits".
+  - `taskkill` is refused.
+
+  "Pick a runtime" says which runtime to use for work, not only review.
+
+From an outside run of v0.3.1 on Linux (another user's machine) and its follow-up reviews:
+- **Done no longer depends on file times (D27).** When `FINAL_REPORT.md` is written, `publish`
+  appends its SHA-256 to the handoff (`Final report: ...`), and `done` needs a PASS on a handoff
+  whose hash matches the current report. Git clones and plain copies do not keep file times, so
+  the bundled example could show `NEXT: worker` after a clone, and a copy could make an edited
+  report look reviewed. An edit after the final PASS now shows the reason. Handoffs without the
+  line (older folders) keep the time rule. Both helpers write identical bytes.
+- **Drivers on Linux/macOS:** an agent that exits without reading its prompt (e.g. on a sign-in
+  error) could make the driver crash with "Broken pipe" instead of counting a failed attempt. The
+  prompt is now handed over as a file by `sh`, not through a pipe.
+- **Codex re-own:** files were skipped when the task folder itself sat under any `WATCHERS/` or
+  `HISTORY/` (e.g. a reviewer's scratch); only the task's own folders are skipped now.
+- The bundled example is re-recorded with this version, so it shows `done` after a clone.
+- `looper.sh` ignores one leading UTF-8 byte order mark when it reads a handoff or review, as
+  `looper.ps1` does (Windows PowerShell 5.1 writes one). Before, a BOM-first report binding or
+  verdict was missed by `sh` only. Found by the final review.
+- Acceptance suite: 53 checks.
+- Worker prompt: a one-shot run (a single headless prompt) starts no driver or wait in the
+  background, since they end with it.
+- Setup: allow the Looper helper and drivers for every task folder a session and its subagents
+  will use (README Quick start; Claude Code README "Permissions"). The worker prompt says to ask
+  the user, never to widen its own permissions.
+- Evidence: E20-E21 in `docs/testing.md`.
+
 ## v0.3.1 - Level 1 Deluxe
 
 Fixes from an outside review of the public v0.3.0:

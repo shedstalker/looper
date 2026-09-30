@@ -379,12 +379,94 @@ Check 'claude-code driver: -Local reaches the child and leaves the caller''s ANT
         (@(Get-Content $record) -join ',') -eq 'http://localhost:11434' -and ($env:ANTHROPIC_BASE_URL -eq 'caller')
     } finally { $env:ANTHROPIC_BASE_URL, $env:OLLAMA_HOST = $saved }
 }
-Check 'replay after done: an old handoff text cannot reopen and inherit a PASS' {
+Check 'driver: the agent gets its prompt on stdin; one that quits without reading it is only a failed attempt' {
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { return 'skip' }   # drivers need PowerShell 7
+    $loop8 = Join-Path $Scratch 'stdin/.looper'
+    & $shell -NoProfile -File $ps1Helper new $loop8 -Project (Join-Path $Scratch 'stdin') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $loop8 'EXCHANGE/HANDOFF.next.md'), "Request: review`nCandidate: stdin`n")
+    & $shell -NoProfile -File $ps1Helper publish $loop8 handoff | Out-Null
+    $got = Join-Path $Scratch 'stdin-got.txt'
+    if ($IsWindows) {
+        $reader = Join-Path $Scratch 'fake-reader.cmd'; $quitter = Join-Path $Scratch 'fake-quitter.cmd'
+        Set-Content -LiteralPath $reader -Value "@`"$shell`" -NoProfile -Command `"[IO.File]::WriteAllText('$got', [Console]::In.ReadToEnd())`""
+        Set-Content -LiteralPath $quitter -Value '@exit /b 3'
+    } else {
+        $reader = Join-Path $Scratch 'fake-reader'; $quitter = '/bin/true'   # exits at once: the likeliest to beat the prompt
+        Set-Content -LiteralPath $reader -Value "#!/bin/sh`ncat > '$got'"
+        & chmod +x $reader
+    }
+    $driver = Join-Path $repo 'drivers/claude-code/run.ps1'
+    & $driver -Loop $loop8 -Claude $reader -Once -MaxFailures 1 *> $null
+    $prompted = (Test-Path -LiteralPath $got) -and ((Get-Content -Raw -LiteralPath $got) -match 'Looper reviewer wake-up')
+    # Before the fix, on Linux, a run like this threw "Broken pipe" now and then (1 in 40 in Docker,
+    # 6 in 7 on another machine) instead of counting a failed attempt; timing decides, so repeat.
+    $crashes = 0
+    foreach ($i in 1..20) { try { & $driver -Loop $loop8 -Claude $quitter -Once -MaxFailures 1 *> $null } catch { $crashes++ } }
+    $failedAttempts = @(Get-Content -LiteralPath (Join-Path $loop8 'WATCHERS/reviewer.log') | Where-Object { $_ -match 'attempt ended without publishing' }).Count
+    $prompted -and ($crashes -eq 0) -and ($failedAttempts -ge 20)
+}
+Check 'final report bound by hash: done survives lost write times; an edit after the PASS is caught' {
+    # The final handoff above was published after FINAL_REPORT.md was written, so it names its hash.
+    $handoffText = [IO.File]::ReadAllText((Join-Path $loop 'EXCHANGE/HANDOFF.md'))
+    $report = Join-Path $loop 'FINAL_REPORT.md'
+    $named = $handoffText -match ('(?m)^Final report: `FINAL_REPORT\.md`, sha256 ' + (Sha $report) + '\s*$')
+    # A git clone or a plain copy gives files arbitrary times: make the report look newer.
+    [IO.File]::SetLastWriteTimeUtc($report, [DateTime]::UtcNow.AddHours(1))
+    $doneAnyway = (Next) -eq 'done'
+    $original = [IO.File]::ReadAllBytes($report)
+    [IO.File]::AppendAllText($report, "`nEdited after the final PASS.`n")
+    $status = Looper status $loop
+    $caught = ((Next) -eq 'worker') -and ($status -match 'FINAL_REPORT.md changed after handoff')
+    [IO.File]::WriteAllBytes($report, $original)
+    $named -and $doneAnyway -and $caught -and ((Next) -eq 'done')
+}
+Check 'report hash after a UTF-8 BOM (as Windows PowerShell 5.1 writes): both editions read and publish it alike' {
+    if (-not (Get-Command sh -ErrorAction SilentlyContinue)) { return 'skip' }   # needs both editions
+    $shHelper = Join-Path $repo 'tools/looper.sh'
+    function StatusBoth([string]$Folder) {
+        $a = & $shell -NoProfile -File $ps1Helper status $Folder 2>&1 | Out-String
+        $b = & sh $shHelper status $Folder 2>&1 | Out-String
+        @([regex]::Match($a, '(?m)^NEXT: (\w+)').Groups[1].Value, [regex]::Match($b, '(?m)^NEXT: (\w+)').Groups[1].Value)
+    }
+    $bom = [string][char]0xFEFF; $utf8 = [Text.UTF8Encoding]::new($false)
+    # A hand-written handoff whose first line is the binding, behind a BOM, with CRLF lines.
+    $t = Join-Path $Scratch 'bom-status'; New-Item -ItemType Directory -Force -Path "$t/EXCHANGE", "$t/HISTORY" | Out-Null
+    [IO.File]::WriteAllText("$t/FINAL_REPORT.md", "Original report`n", $utf8)
+    $line = 'Final report: `FINAL_REPORT.md`, sha256 ' + (Sha "$t/FINAL_REPORT.md")
+    [IO.File]::WriteAllText("$t/EXCHANGE/HANDOFF.md", "$bom$line`r`nRequest: final review`r`n", $utf8)
+    Copy-Item "$t/EXCHANGE/HANDOFF.md" "$t/HISTORY/001_HANDOFF.md"
+    [IO.File]::WriteAllText("$t/EXCHANGE/REVIEW.md", "Handoff: 001 $((Sha "$t/EXCHANGE/HANDOFF.md").Substring(0, 12))`nVerdict: PASS`n", $utf8)
+    [IO.File]::SetLastWriteTimeUtc("$t/EXCHANGE/HANDOFF.md", [datetime]'2021-01-01')
+    [IO.File]::SetLastWriteTimeUtc("$t/FINAL_REPORT.md", [datetime]'2030-01-01')   # newer, but unchanged
+    $unchanged = StatusBoth $t
+    [IO.File]::WriteAllText("$t/FINAL_REPORT.md", "Edited after the PASS`n", $utf8)
+    [IO.File]::SetLastWriteTimeUtc("$t/FINAL_REPORT.md", [datetime]'2020-01-01')   # older, but changed
+    $edited = StatusBoth $t
+    # A BOM review whose first line is the verdict.
+    [IO.File]::WriteAllText("$t/FINAL_REPORT.md", "Original report`n", $utf8)
+    [IO.File]::WriteAllText("$t/EXCHANGE/REVIEW.md", "${bom}Verdict: PASS`nHandoff: 001 $((Sha "$t/EXCHANGE/HANDOFF.md").Substring(0, 12))`n", $utf8)
+    $bomReview = StatusBoth $t
+    # Publishing the same BOM draft (binding on its first line) with each edition.
+    $ids = foreach ($e in 'ps1', 'sh') {
+        $f = Join-Path $Scratch "bom-publish-$e/.looper"
+        & $shell -NoProfile -File $ps1Helper new $f -Project (Join-Path $Scratch "bom-publish-$e") | Out-Null
+        [IO.File]::WriteAllText("$f/FINAL_REPORT.md", "Report`n", $utf8)
+        $l = 'Final report: `FINAL_REPORT.md`, sha256 ' + (Sha "$f/FINAL_REPORT.md")
+        [IO.File]::WriteAllText("$f/EXCHANGE/HANDOFF.next.md", "$bom$l`r`nRequest: final review`r`n", $utf8)
+        if ($e -eq 'ps1') { & $shell -NoProfile -File $ps1Helper publish $f handoff | Out-Null } else { & sh $shHelper publish $f handoff | Out-Null }
+        $text = [IO.File]::ReadAllText("$f/EXCHANGE/HANDOFF.md").TrimStart([char]0xFEFF)
+        '{0}:{1}' -f (Sha "$f/EXCHANGE/HANDOFF.md"), ([regex]::Matches($text, '(?m)^Final report: ').Count)
+    }
+    (($unchanged -join ',') -eq 'done,done') -and (($edited -join ',') -eq 'worker,worker') -and (($bomReview -join ',') -eq 'done,done') -and
+    ($ids[0] -eq $ids[1]) -and ($ids[0] -like '*:1')
+}
+Check 'after done: re-sending an old handoff text cannot inherit its PASS' {
+    # It now names the final report too, so it is a new request, never the old text.
     Draft HANDOFF "Request: review`nCandidate: value.txt = 2 (repaired)`n"
     $null = Looper publish $loop handoff
-    $refused = $code -ne 0
+    $published = $code -eq 0
     Remove-Item (Join-Path $loop 'EXCHANGE/HANDOFF.next.md') -ErrorAction SilentlyContinue
-    $refused -and ((Next) -eq 'done')
+    $published -and ((Next) -eq 'reviewer') -and ([IO.File]::ReadAllText((Join-Path $loop 'EXCHANGE/HANDOFF.md')) -match '(?m)^Final report: ')
 }
 # Lifecycle hygiene: reuse, clean, and driver sessions (fake agent, no model).
 Check 'reuse: new on an existing task folder points to it instead of creating another' {

@@ -100,6 +100,12 @@ function Get-Note([string]$Path) {
     return $note
 }
 
+function Get-ReportSha([string]$Text) {
+    # The final report a handoff names (publish adds the line when the report is written), or $null.
+    $m = [regex]::Matches($Text, '(?m)^Final report: `FINAL_REPORT\.md`, sha256 ([0-9a-f]{64})\s*$')
+    if ($m.Count) { $m[$m.Count - 1].Groups[1].Value } else { $null }
+}
+
 function Get-Paths([string]$Root) {
     [pscustomobject]@{
         Root     = $Root
@@ -174,10 +180,14 @@ function Get-State([string]$Root) {
         $state.Next = 'worker'; $state.Why = 'no handoff published yet'
     } elseif (-not $state.ReviewFor -or $state.ReviewFor.Sha -cne $handoff.Sha) {
         $state.Next = 'reviewer'; $state.Why = "handoff $($state.HandoffNumber) $($handoff.Short) has no applicable review"
-    } elseif ($state.Verdict -eq 'PASS' -and $final -and $final.Time -le $handoff.Time) {
-        # Done only when the report existed before the handoff that passed, i.e. it was reviewed.
-        # A report written after the last PASS is not done yet: it still needs a final handoff.
+    } elseif ($state.Verdict -eq 'PASS' -and $final -and $(
+            # Done only when the passing handoff covered this exact report, i.e. it was reviewed. The
+            # handoff names the report's hash; older or hand-written ones fall back to write times.
+            $named = Get-ReportSha $handoff.Text
+            if ($named) { $final.Sha -ceq $named } else { $final.Time -le $handoff.Time })) {
         $state.Next = 'done'; $state.Why = "handoff $($state.HandoffNumber) passed and FINAL_REPORT.md is written"
+    } elseif ($state.Verdict -eq 'PASS' -and $final -and (Get-ReportSha $handoff.Text)) {
+        $state.Next = 'worker'; $state.Why = "FINAL_REPORT.md changed after handoff $($state.HandoffNumber) named it; publish a new final handoff"
     } else {
         $state.Next = 'worker'; $state.Why = "answer ($(if ($state.Verdict) { $state.Verdict } else { 'no verdict' })) published for handoff $($state.HandoffNumber) $($handoff.Short)"
     }
@@ -330,6 +340,14 @@ function Invoke-Publish([string]$Root) {
     }
 
     if ($Kind -eq 'handoff') {
+        # A written final report is bound by content: its hash becomes part of the handoff, so "done"
+        # never depends on write times (git clones and plain copies do not keep them).
+        $report = Get-Note $P.Final
+        if ($report -and -not (Get-ReportSha $note.Text)) {
+            $gap = if ($bytes[-1] -eq 10) { "`n" } else { "`n`n" }
+            $bytes = [byte[]]($bytes + [Text.Encoding]::UTF8.GetBytes("${gap}Final report: ``FINAL_REPORT.md``, sha256 $($report.Sha)`n"))
+            $note = New-Note $bytes
+        }
         $current = Get-Note $P.Handoff
         if ($current -and $current.Sha -ceq $note.Sha) {
             if ($draftPath -eq $defaultDraft) { Remove-Item -LiteralPath $draftPath -Force }

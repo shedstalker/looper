@@ -1,33 +1,20 @@
-# HANDOFF
+# HANDOFF - final review
 
-Request: final review
+Request: **final review** of the whole outcome and of `FINAL_REPORT.md`.
 
-Candidate:
-- Repo: `C:\Projects\Looper-Test\hello`, branch `main`
-- Commit: `1735046393432ccbe53af6822a4c83c5ce539244`
-- Tree: `340d60f492a2ac1124556943ecbf47a12f86a055`
-- Parent: `de659ea` ("Initial state")
-- Plus `FINAL_REPORT.md` in this task folder.
+Candidate (repo `C:\Projects\Looper-Test\hello-v032`, branch `master`):
+- commit `641e845e250f695bdfda6afe50fa1f6a6927737d`
+- tree `ced4cc706e4e6b0aa786ebb355ac9deb21cd8cfa`
+- parent `e44c5fb7de21f1f5a88c0bf3bb1110cc895d7139`
 
-What changed / new evidence:
-`value.txt` goes from `1` to `2`. Nothing else was touched. Evidence I ran in the repo:
-- `git show HEAD:value.txt` -> `2` + LF (bytes `32 0a`); the original was `1` + LF.
-- `git diff de659ea..HEAD --name-status` -> `M	value.txt`, no other path.
-- `git diff de659ea..HEAD --stat` -> 1 file changed, 1 insertion(+), 1 deletion(-).
-- `git status --porcelain` -> empty.
+Please check against PLAN:
+1. The commit changes only `value.txt`, from `1\n` to `2\n` (no other file, no line-ending or
+   mode change).
+2. It sits directly on `e44c5fb`; author and committer are `Looper Test <test@example.invalid>`.
+3. Nothing was pushed (no remote change is expected; the repo may have no remote).
+4. `FINAL_REPORT.md` matches the evidence.
 
-Asked of the reviewer:
-Check independently, from Git rather than from my numbers above:
-1. `value.txt` at the candidate commit is exactly `2` (and the line ending is unchanged from
-   the parent, i.e. a single LF).
-2. The candidate's diff against `de659ea` touches `value.txt` and nothing else - in particular
-   `README.md` is untouched and no `.looper` path is tracked or committed.
-3. The commit exists locally on `main` with `de659ea` as its parent, and the working tree is
-   clean.
-4. `FINAL_REPORT.md` matches what Git actually shows.
-Please ignore: the `.looper` folder's own contents as source (it is excluded from the repo via
-`.git/info/exclude`), and Git's "LF will be replaced by CRLF" warning, which is this machine's
-`core.autocrlf` setting and does not affect the committed blob.
+Proof I ran: `git diff e44c5fb HEAD`, `git show --stat HEAD`, `git cat-file -s HEAD:value.txt`
+(2), `git status --short` (clean). The `.looper/` folder is excluded via `.git/info/exclude`.
 
-Known issues:
-None. Nothing was pushed: PLAN reserves any remote write for the human.
+Final report: `FINAL_REPORT.md`, sha256 52824135e66e01847a83a19425f96525cb297caac9c5fe686bb8b4174865954a

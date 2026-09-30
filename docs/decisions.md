@@ -57,7 +57,7 @@ SKILL.md source and a build script that bundles copies of `template/`, `prompts/
 run: the worker wrote FINAL_REPORT 11 s before publishing its final handoff; during that gap
 the old rule ("PASS + report exists") read `done` and the reviewer driver exited, leaving the
 final handoff unreviewed. Now the report only counts once a later handoff has passed (file
-times, same machine). Editing the report after the final PASS reopens the task. *Why:* keeps
+times, same machine; superseded by D27's hash for new handoffs). Editing the report after the final PASS reopens the task. *Why:* keeps
 state derived from files, no new marker, and the report is always independently reviewed.
 
 **D13 - Handoff texts are unique within a task.** Found by the dogfood review (Codex, handoff
@@ -159,3 +159,13 @@ a plain copy). Also from the same use, documentation only: waiting with `wait -F
 session growth, launching a watchable driver, the report's status as a claim, and a host prompt
 snippet. A `-NewWindow` option and cumulative token totals in `status` were not added: the logs
 already hold the facts, and window management stays outside Looper.
+
+**D27 - The final report is bound by hash, not by write times (outside use, 2026-09-30).** A
+fresh clone of the public repository showed the bundled example as `NEXT: worker`: git does not
+keep file times, so D12's "report not newer than the passing handoff" came out at random, and a
+plain copy could also make an edited report look reviewed. Now `publish` appends the report's
+SHA-256 to a handoff when the report is written, and `done` needs a PASS on a handoff whose named
+hash matches the current report. An edit after the final PASS shows `NEXT: worker` with the reason.
+*Why this shape:* it is how Looper already binds answers to handoffs (content, not time). The
+line is part of the handoff's bytes, so a changed report is a new request. Both helpers write
+identical bytes, and handoffs without the line keep D12's rule, so old task folders still work.

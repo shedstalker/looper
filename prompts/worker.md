@@ -52,7 +52,11 @@ Git and the actual source over anything you remember.
   background if your agent supports that) and carry on with independent work meanwhile. It
   returns with the handoff number, id and verdict (exit 0; exit 2 = task done; exit 3 = timed
   out, wait again). Don't read driver logs to detect an answer. If you started a reviewer driver
-  yourself, its exit code 5 means it gave up, and `WATCHERS/reviewer.log` says why.
+  yourself, its exit code 5 means it gave up, and `WATCHERS/reviewer.log` says why. In a one-shot
+  run (a single headless prompt that ends when you answer), background commands end with you:
+  start no driver or wait there. Say instead which reviewer command the user should run.
+- If your runtime's permissions refuse the helper or a driver for a task folder, do not work
+  around it or change your own settings: tell the user which command and folder to allow.
 
 ## 4. When the answer arrives
 
@@ -76,6 +80,6 @@ A PASS is technical evidence about that exact candidate. It never authorises a r
 3. REPAIR -> fix and repeat. PASS -> `status` shows `NEXT: done`. Tell the user the result and
    anything reserved for them.
 
-`done` means the report existed before the handoff that passed. Editing the report afterwards
-(even to record the verdict - REVIEW.md already holds it) reopens the task and needs another
-final handoff and review.
+`done` means the handoff that passed covered this exact report: `publish` adds the report's hash to
+the handoff for you. Editing the report afterwards (even to record the verdict - REVIEW.md already
+holds it) reopens the task and needs another final handoff and review.

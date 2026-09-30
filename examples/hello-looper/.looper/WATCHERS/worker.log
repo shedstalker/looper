@@ -1,2 +1,2 @@
-2026-09-27T13:18:57 worker driver started: C:\Users\<user>\.local\bin\claude.exe (pid 27032)
-2026-09-27T13:21:33 worker task done; driver exiting
+2026-09-30T21:55:17 worker driver started: C:\Users\<user>\.local\bin\claude.exe (pid 20124) session=resume requested: model=(claude default) effort=(claude default)
+2026-09-30T21:55:18 worker task done; driver exiting

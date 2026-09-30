@@ -50,11 +50,45 @@ pwsh -File drivers/codex/run.ps1 -Loop <folder> -Role worker
 `codex exec --sandbox workspace-write --cd <project> --add-dir <task folder> -`, resumed on later
 wakes (with the task folder passed again as a writable root); TASK.md carries the work either way.
 
-**Commits:** `workspace-write` keeps `.git` read-only, so a sandboxed Codex worker can edit but
-not commit (on Windows, `--add-dir <repo>/.git` is refused too; tested 2026-09-27). Choose one:
-let the human commit when the worker asks (it will send an access request / park the item),
-or run the worker with `-Sandbox danger-full-access` - an explicit security decision for you,
-best kept to disposable or well-backed-up checkouts. For an interactive Codex worker, have it run
+**What a sandboxed Codex builder can do on Windows** (codex-cli 0.159, tested 2026-09-30 with
+`codex sandbox -- <command>`, which runs one command in the same sandbox without a model; use it
+to check a tool before a run):
+
+| Action | In `workspace-write` |
+|---|---|
+| Edit files in the project; run Windows PowerShell 5.1 | works |
+| PowerShell 7 from the official zip, unpacked to a folder the sandbox accounts can read | works: from a scratch folder Codex had granted, Looper's suite passed 50/50 inside the sandbox; the same zip in `C:\Tools\PowerShell\7` started there |
+| PowerShell 7 from the Microsoft Store (`...\WindowsApps\pwsh.exe`) | cannot start ("Access is denied") |
+| Tested tools by full path: `git` (read), Git Bash `C:\Program Files\Git\bin\sh.exe`, `gh --version` (with a warning that it cannot read its config) | start |
+| Tested executables under `%LOCALAPPDATA%\Programs` (PowerShell 7, OpenCode, Ollama, Docker Desktop's `docker.exe`) | cannot start: the sandbox runs as separate Windows accounts (`CodexSandboxUsers`), and on the tested machine they had no read access there |
+| Network | off by default. With `-c sandbox_workspace_write.network_access=true`, Ollama's API on `localhost` answered, but one HTTPS request to github.com failed (`SEC_E_NO_CREDENTIALS`) |
+| `wsl -l -q` | refused. A Docker daemon connection was not tested |
+| `git commit` in the project's existing repository | refused: its `.git` stays read-only, also when listed in `writable_roots` (and `--add-dir <repo>/.git` was refused on 2026-09-27 with 0.158). A new repository the sandbox creates in a writable folder can commit, but that is not the project |
+| `taskkill.exe` | refused, even for its own child processes; `Stop-Process` works on those |
+
+Check any other tool before relying on it: `codex sandbox -- <full path to the program> --version`.
+
+So, for a Codex builder that proves its work on both PowerShell editions: download the official
+`PowerShell-<version>-win-x64.zip` from github.com/PowerShell/PowerShell/releases, check its
+SHA-256, and unpack it to a folder you are allowed to create and the sandbox accounts can read and
+run. On the tested machine a new `C:\Tools\PowerShell\7` worked, because it inherited read-and-run access
+for all users from `C:\` (no admin needed there); `%LOCALAPPDATA%\Programs` did not. Check it with
+`codex sandbox -- <folder>\pwsh.exe -Version`, then name that path in PLAN or TASK; PATH can stay as it
+is. Only the zip was tested; the MSI (it installs to `C:\Program Files`) is an untested alternative -
+run the same check first.
+
+Use a finisher for the commit to the project's protected repository and for any proof your
+sandbox checks show cannot run. The recorded WSL command and github.com HTTPS request failed;
+Docker daemon access was not tested. Choose one:
+- **Codex drafts, a finisher commits** (recommended; the sandbox stays on). The worker proves the
+  draft and says so in TASK.md; the human or a host agent reviews `git diff`, commits it in the
+  same clone, and offers that commit for review.
+- **A builder that commits and proves itself:** use Claude Code as the worker, with Codex
+  reviewing. That is the pairing tested most.
+- `-Sandbox danger-full-access`: an explicit security decision for you (no containment at all),
+  best kept to disposable or well-backed-up checkouts.
+
+For an interactive Codex worker, have it run
 `looper.ps1 wait <folder> -For worker` as a blocking command between checkpoints, or start a
 new session with `Continue the Looper task at <folder> as the WORKER - read its CONTEXT.md.`
 

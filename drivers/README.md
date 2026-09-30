@@ -22,6 +22,11 @@ Sign-in, cost and the exact permissions are in each driver's README. "Offered by
 is not "passed a Looper handoff": run one review round before relying on a new model. For
 independence, give the reviewer a different model from the worker.
 
+**For work, not only review:** Claude Code as the worker can edit, prove and commit. A Codex
+worker on Windows drafts and proves inside its sandbox, but it cannot commit to the project's
+repository. It runs PowerShell 7 from the official zip (tested), not from the Store. You or another agent commits its drafts
+([what the Codex sandbox allows](codex/README.md#worker---headless)).
+
 ## Pick how each role runs
 
 | Role runs as | How it is woken | Idle model cost |

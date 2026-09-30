@@ -1,29 +1,25 @@
 # PLAN
 
 ## Outcome
-In the git repo `C:\Projects\Looper-Test\hello`, `value.txt` contains `2` instead of `1`, and
-that change is committed locally on `main`. Nothing else in the repo is changed.
+In `C:\Projects\Looper-Test\hello-v032`, `value.txt` contains `2` instead of `1`, committed
+locally as one new commit on `master` on top of `e44c5fb`. Nothing else changes.
 
 ## Context
-- Repo: `C:\Projects\Looper-Test\hello`, branch `main`, starting commit `de659ea` ("Initial state").
-- Files: `README.md`, `value.txt` (content `1`).
-- The task folder `.looper` is excluded from the repo via `.git/info/exclude`, so it never
-  appears in the commit.
+Repo `C:\Projects\Looper-Test\hello-v032`, branch `master`, HEAD `e44c5fb value 1`, clean tree.
+`value.txt` is the only tracked file; its bytes are `31 0A` ("1\n").
 
 ## Boundaries
-- Allowed: edit `value.txt`, run git commands that only touch the local repo (add, commit,
-  diff, log, status), write inside `.looper`.
-- Not allowed: any other source change, README edits, branch creation, history rewriting,
-  amending or reverting `de659ea`.
-- Reserved for the human: `git push` and any other remote or external write.
+- Allowed: edit `value.txt` (1 -> 2, keeping the trailing LF), set the repo-local identity
+  `user.name "Looper Test"`, `user.email test@example.invalid` (user asked), and commit locally.
+- Not allowed: any other tracked change, history rewrite, other files or repos.
+- Reserved for the human: push, merge into `main`, anything external.
 
 ## Proof
-- `git show <commit>:value.txt` is `2`.
-- `git diff de659ea..<commit> --stat` shows exactly one file changed, `value.txt`, 1 insertion
-  and 1 deletion.
-- `git status --porcelain` in the repo is clean (the `.looper` folder is excluded, not committed).
-- Negative case: the commit must not contain `README.md`, `.looper` or any other path.
+- `git show --stat HEAD`: exactly one file, `value.txt`, 1 insertion / 1 deletion.
+- `value.txt` bytes are `32 0A`; parent of HEAD is `e44c5fb`; author/committer is Looper Test.
+- `git status` clean for tracked files (the `.looper/` folder is excluded via `.git/info/exclude`).
 
 ## Escalation
-Stop and ask the human if the repo turns out to be dirty in ways this task did not cause, or if
-the outcome cannot be reached without a reserved action (e.g. a push).
+Stop and ask if the repo is not in the state described in Context.
+
+Worker freedom: inside this boundary the worker chooses the approach, order and tests.

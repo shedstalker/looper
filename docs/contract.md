@@ -60,8 +60,15 @@ Computed from the files every time; nothing else is stored:
 |---|---|
 | no published handoff | worker |
 | current REVIEW does not name the current HANDOFF | reviewer |
-| it names it, verdict PASS, and FINAL_REPORT was written before that handoff was published | done |
+| it names it, verdict PASS, and that handoff covered the current FINAL_REPORT (see below) | done |
 | it names it (otherwise) | worker |
+
+"Covered" is decided by content. When `FINAL_REPORT.md` is written (no marker line), `publish`
+appends its hash to the handoff as one exact line:
+`` Final report: `FINAL_REPORT.md`, sha256 <64 lowercase hex> `` (by hand, write that line yourself).
+The handoff covers the report when the current report still has that hash. For a handoff without
+the line (older task folders), the rule falls back to write times: the report must not be newer
+than the handoff. Git clones and plain copies do not keep those times, which is why the hash exists.
 
 Consequences, by construction:
 
