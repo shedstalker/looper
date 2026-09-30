@@ -8,7 +8,9 @@ name, short description, default prompt `$looper`) are the only skill-specific f
 `build.ps1` generates the package by copying the canonical `template/`, `prompts/`, `tools/`,
 `drivers/`, `docs/contract.md` and `LICENSE` next to them - a copy, never a fork. Rebuild after
 changing Looper; the build verifies every packaged file (and the zip) byte-for-byte against the
-repository, and `-Check` verifies an existing package without rebuilding.
+repository, and `-Check` verifies an existing package without rebuilding. A rebuild replaces only
+a package the build generated (or an empty folder), never one that holds this repository or
+contains a link; it refuses any other existing `-Out`.
 
 ```powershell
 pwsh -File integrations/skill/build.ps1 -Out ~/.claude/skills/looper   # Claude Code (personal)

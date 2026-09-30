@@ -44,8 +44,11 @@ worker --HANDOFF.md--> second agent --REVIEW.md--> worker --> ... --> PASS + FIN
 
 Both agents must run somewhere with local file access (a CLI agent, or a desktop app with local
 file access); an ordinary browser chat cannot reach local files. The worker reads and writes your
-project; the second agent only needs to read it and write its answer in the task folder. The
-Windows examples use `C:\Projects\Looper` and PowerShell; macOS/Linux is shown after the steps.
+project; the second agent only needs to read it and write its answer in the task folder. Keep
+the task folder (by default `.looper/` in your project) on a local disk, not inside Google Drive,
+OneDrive or Dropbox: their sync can delay or reorder the renames Looper relies on. A file that
+lives there can still be attached to a handoff. The Windows examples use `C:\Projects\Looper`
+and PowerShell; macOS/Linux is shown after the steps.
 
 1. **Get Looper** - download a release, or clone it and update it like any git repository:
 
@@ -123,7 +126,7 @@ counts the second.
 | **OpenCode** | Grok, as reviewer and worker (`xai/grok-4.7` requested with a SuperGrok sign-in; OpenCode does not report the model that answered); Qwen through Ollama (one review) | Gemini, and everything else `opencode models` lists |
 | Any other agent | not tested; the by-hand protocol it would follow was tested with all scripts removed (Claude and Codex) | its own |
 
-- **Checks without models:** 48 acceptance checks. Every check that applies passes on Windows
+- **Checks without models:** 50 acceptance checks. Every check that applies passes on Windows
   (PowerShell 7 and 5.1, Git Bash `sh`) and Linux (Docker: `pwsh`, `dash`); a few are
   platform-specific and skip elsewhere ([details](docs/testing.md#deterministic-suite---testsacceptanceps1)).
 - **Live runs:** real, separate agents answering real handoffs, including repairs, crashes,
@@ -186,6 +189,8 @@ More in [docs/history.md](docs/history.md): origins, lineage and the lessons beh
 - **v0.2.1 - Level 1 Deluxe**: the first public release (documentation only).
 - **v0.3.0 - Level 1 Deluxe**: the OpenCode driver (a third runtime route), attachments for
   files outside Git, fixes found in real use, current model guidance.
+- **v0.3.1 - Level 1 Deluxe**: fixes from an outside review (git worktrees, the Skill build's
+  output guard) and a Quick start note on cloud-synced folders.
 
 Nothing beyond Level 1 is implemented here. What each version delivered: [CHANGELOG.md](CHANGELOG.md).
 

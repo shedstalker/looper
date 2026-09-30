@@ -17,7 +17,8 @@ preferably different models or providers, so the review is genuinely independent
 ## Task folder
 
 ```text
-<folder>/                (usually <project>/.looper, kept out of commits via .git/info/exclude)
+<folder>/                (usually <project>/.looper, kept out of commits via git's info/exclude;
+                         in a worktree, the main repository's)
   CONTEXT.md             router: what this task is, where things are, what to read
   PLAN.md                boundary: outcome, context, boundaries, proof, escalation
   TASK.md                shared live working memory (free-form)

@@ -338,11 +338,14 @@ cmd_new() {
     # Keep the task folder out of the project's commits without touching tracked files.
     # Ask git for the folder's path inside its repo (avoids comparing path spellings, e.g. C:/ vs /c/).
     prefix=$(cd "$ROOT" && git rev-parse --show-prefix 2>/dev/null) || prefix=''
-    gitdir=$(cd "$ROOT" && git rev-parse --absolute-git-dir 2>/dev/null) || gitdir=''
-    if [ -n "$prefix" ] && [ -n "$gitdir" ]; then
+    # --git-path: the exclude file git reads (in a linked worktree, the main repository's); it may be
+    # relative to the folder git ran in, so resolve it there.
+    exclude=$(cd "$ROOT" && p=$(git rev-parse --git-path info/exclude 2>/dev/null) &&
+        case $p in /* | [A-Za-z]:/* | [A-Za-z]:'\'*) printf '%s' "$p" ;; *) printf '%s/%s' "$PWD" "$p" ;; esac) || exclude=''
+    if [ -n "$prefix" ] && [ -n "$exclude" ]; then
         entry="/$prefix"
-        mkdir -p "$gitdir/info"
-        grep -qxF "$entry" "$gitdir/info/exclude" 2>/dev/null || printf '\n%s\n' "$entry" >> "$gitdir/info/exclude"
+        mkdir -p "$(dirname -- "$exclude")"
+        grep -qxF "$entry" "$exclude" 2>/dev/null || printf '\n%s\n' "$entry" >> "$exclude"
     fi
 
     echo "LOOPER created $ROOT"

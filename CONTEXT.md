@@ -8,7 +8,8 @@ files. Read this file first, then only what your task needs.
 - **This repository** (`shedstalker/looper`) is Looper's public release and product repository.
   Looper was developed privately through v0.1.0 (Level 1 Basic) and v0.2.0 (Level 1 Deluxe);
   public distribution begins with **v0.2.1 - Level 1 Deluxe**; the current release is
-  **v0.3.0 - Level 1 Deluxe** (OpenCode route, attachments, fixes). Nothing beyond Level 1 is
+  **v0.3.1 - Level 1 Deluxe** (v0.3.0's OpenCode route, attachments and fixes, plus fixes from an
+  outside review). Nothing beyond Level 1 is
   implemented here. Development and release qualification happen in the maintainers' development
   repository; changes arrive here as reviewed releases (README, "Issues and changes").
 - **A task's `.looper/` folder** owns that task's state (it is created from `template/`).

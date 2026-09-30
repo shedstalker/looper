@@ -77,6 +77,16 @@ Check 'bootstrap: task folder kept out of commits (.git/info/exclude)' {
     if (-not $gitOk) { return 'skip' }   # git not installed
     (Get-Content -Raw (Join-Path $project '.git/info/exclude')) -match '/\.looper/'
 }
+Check 'bootstrap: in a git worktree the folder is excluded where git reads it (the shared info/exclude)' {
+    if (-not $gitOk) { return 'skip' }
+    $wt = Join-Path $Scratch 'worktree'
+    $ErrorActionPreference = 'Continue'; & git -C $project worktree add -q $wt 2>$null; $ErrorActionPreference = 'Stop'
+    if (-not (Test-Path (Join-Path $wt 'value.txt'))) { return $false }
+    # Its own folder name: the main checkout's shared exclude already covers /.looper/.
+    $null = Looper new (Join-Path $wt 'wt-task/.looper') -Project $wt; $newCode = $code
+    $ErrorActionPreference = 'Continue'; $st = & git -C $wt status --porcelain 2>$null; $ErrorActionPreference = 'Stop'
+    ($newCode -eq 0) -and (@($st | Where-Object { $_ -match 'wt-task' }).Count -eq 0)
+}
 Check 'bootstrap: new never overwrites an existing folder' { $null = Looper new $loop; $code -ne 0 }
 Check 'fresh folder: NEXT is worker' { (Next) -eq 'worker' }
 Check 'template text cannot be published' {
@@ -417,6 +427,46 @@ Check 'publish: an absolute draft path works, including a drive letter and space
     [IO.File]::WriteAllText($abs, "Request: review`nCandidate: custom draft, forward slashes`n")
     $null = Looper publish $loop4 handoff -Draft ($abs -replace '\\', '/')
     ($first -eq 0) -and ($code -eq 0) -and (Test-Path $abs)
+}
+Check 'skill build: replaces only a generated package, never the repository (even through a link)' {
+    # Disposable copies, so a failed guard can only delete a copy. Every refused output is named
+    # "looper", so only this guard (not the name rule) can refuse it.
+    function Copy-Repo([string]$To) {
+        foreach ($d in 'integrations/skill', 'template', 'prompts', 'tools', 'drivers', 'docs') {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $To $d)) | Out-Null
+            Copy-Item -Recurse -LiteralPath (Join-Path $repo $d) -Destination (Join-Path $To $d)
+        }
+        Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $To
+        Join-Path $To 'integrations/skill/build.ps1'
+    }
+    function Build([string]$Script, [string]$Out) {
+        $ErrorActionPreference = 'Continue'; $null = & $shell -NoProfile -ExecutionPolicy Bypass -File $Script -Out $Out 2>&1; $ErrorActionPreference = 'Stop'
+        $LASTEXITCODE
+    }
+    $g = Join-Path $Scratch 'guard'
+    $build = Copy-Repo (Join-Path $g 'real/looper')
+    $linkType = if ($env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }   # a junction needs no admin rights
+    New-Item -ItemType $linkType -Path (Join-Path $g 'alias') -Target (Join-Path $g 'real') | Out-Null
+    $inner = Copy-Repo (Join-Path $g 'outer/looper/repo')
+    $other = Join-Path $g 'other/looper'; New-Item -ItemType Directory -Force -Path $other | Out-Null; Set-Content (Join-Path $other 'keep.txt') 'x'
+    $refused = @(
+        ((Build $build (Join-Path $g 'real/looper')) -ne 0),    # the repository itself
+        ((Build $build (Join-Path $g 'alias/looper')) -ne 0),   # the repository through a linked parent
+        ((Build $inner (Join-Path $g 'outer/looper')) -ne 0),   # a folder containing the repository
+        ((Build $build $other) -ne 0)                           # an unrelated folder
+    )
+    $kept = (Test-Path -LiteralPath $build) -and (Test-Path -LiteralPath $inner) -and (Test-Path (Join-Path $other 'keep.txt'))
+    $pkg = Join-Path $g 'installed/looper'
+    $rebuilt = ((Build $build $pkg) -eq 0) -and ((Build $build $pkg) -eq 0) -and (Test-Path (Join-Path $pkg 'SKILL.md'))   # a generated package is replaced
+    # A genuine package that later came to hold a checkout: building from that checkout into the
+    # package (directly, and through a linked parent) must refuse and keep the checkout.
+    $held = Join-Path $g 'held/looper'
+    $null = Build $build $held
+    $nested = Copy-Repo (Join-Path $held 'source checkout')
+    New-Item -ItemType $linkType -Path (Join-Path $g 'heldalias') -Target (Join-Path $g 'held') | Out-Null
+    $heldRefused = ((Build $nested $held) -ne 0) -and ((Build $nested (Join-Path $g 'heldalias/looper')) -ne 0) -and (Test-Path -LiteralPath $nested) -and
+        (Test-Path (Join-Path $held 'SKILL.md')) -and @(Get-ChildItem (Split-Path -Parent $nested) -Force -Filter '.build-guard-*').Count -eq 0
+    (-not ($refused -contains $false)) -and $kept -and $rebuilt -and $heldRefused
 }
 $fakeAgent = Join-Path $Scratch 'fake-agent.ps1'
 Set-Content -LiteralPath $fakeAgent -Value @"

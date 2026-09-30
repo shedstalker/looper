@@ -253,13 +253,14 @@ function Invoke-New([string]$Root) {
 
     # Keep the task folder out of the project's commits without touching tracked files.
     $git = $null
-    try { $ErrorActionPreference = 'Continue'; $git = & git -C $projectDir rev-parse --show-toplevel 2>$null; $gitDir = & git -C $projectDir rev-parse --absolute-git-dir 2>$null }
+    # --git-path: the exclude file git reads (in a linked worktree, the main repository's).
+    try { $ErrorActionPreference = 'Continue'; $git = & git -C $projectDir rev-parse --show-toplevel 2>$null; $excludePath = & git -C $projectDir rev-parse --git-path info/exclude 2>$null }
     catch { $git = $null } finally { $ErrorActionPreference = 'Stop' }
-    if ($git -and $gitDir) {
+    if ($git -and $excludePath) {
         $top = [IO.Path]::GetFullPath($git).TrimEnd('\', '/')
         if ($Root.StartsWith($top + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
             $relative = $Root.Substring($top.Length + 1).Replace('\', '/')
-            $exclude = Join-Path $gitDir 'info/exclude'
+            $exclude = [IO.Path]::GetFullPath([IO.Path]::Combine($projectDir, $excludePath))   # may be relative to the project
             [IO.Directory]::CreateDirectory((Split-Path -Parent $exclude)) | Out-Null
             $lines = if ([IO.File]::Exists($exclude)) { [IO.File]::ReadAllLines($exclude) } else { @() }
             if ("/$relative/" -notin $lines) { [IO.File]::AppendAllText($exclude, "`n/$relative/`n") }

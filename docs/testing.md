@@ -21,7 +21,7 @@ Where to look:
 
 ## Deterministic suite - `tests/acceptance.ps1`
 
-48 checks (27 at v0.1.0 Level 1 Basic; 36 at the first Deluxe checkpoint; 39 at v0.2.0 Level 1 Deluxe; 41 with the OpenCode and Claude Code driver checks; 48 at v0.3.0: six attachment checks, and one from its final review), run against either helper (`-Helper ps1|sh`): bootstrap, git exclude,
+50 checks (27 at v0.1.0 Level 1 Basic; 36 at the first Deluxe checkpoint; 39 at v0.2.0 Level 1 Deluxe; 41 with the OpenCode and Claude Code driver checks; 48 at v0.3.0: six attachment checks, and one from its final review; 50 at v0.3.1, from an outside review), run against either helper (`-Helper ps1|sh`): bootstrap, git exclude (also in a git worktree),
 no-overwrite, template refusal, handoff publish + HISTORY, unchanged handoff quiet, answer
 validation (handoff id required, "previous" mention does not bind), soft-format verdicts, a
 plain research answer without a verdict, REPAIR -> repair -> re-review, stale review refused (exit 4) with
@@ -31,16 +31,18 @@ report-before-final-handoff not done early, done (exit 2), driver give-up after 
 attempts with work still due (exit 5), one driver per role (exit 4), driver detects a
 publishing agent, attachments (snapshot and list, quiet re-send, a failed publish or HISTORY
 write leaves nothing, restoring reuses only an identical snapshot), an absolute `-Draft` path (drive letter, spaces),
-no references to the
+a Skill build that replaces only a package it generated (the repository, a package holding it,
+and either through a junction or symlink, are refused), no references to the
 originating project in shipped code, and (PowerShell 7)
 the OpenCode and Claude Code drivers pass their settings to the child and leave the caller's
 environment untouched.
 
-| Platform (48 checks, measured 2026-09-30 on the v0.3.0 candidate) | `looper.ps1` | `looper.sh` |
+| Platform (50 checks, measured 2026-09-30 on the v0.3.1 candidate) | `looper.ps1` | `looper.sh` |
 |---|---|---|
-| Windows 11, PowerShell 7.6.6 | 48 pass | 48 pass (Git Bash has no `flock`; `clean` checks the Windows lock itself) |
-| Windows 11, Windows PowerShell 5.1 | 46 pass, 2 skipped (the driver checks need PowerShell 7) | 46 pass, 2 skipped (the same) |
-| Linux: PowerShell 7.4.2 in Docker (WSL2), `/bin/sh` = dash | 45 pass, 3 skipped (two Windows-only Codex re-own checks; git exclude, as that image has no git) | 45 pass, 3 skipped (same) |
+| Windows 11, PowerShell 7.6.6 | 50 pass | 50 pass (Git Bash has no `flock`; `clean` checks the Windows lock itself) |
+| Windows 11, Windows PowerShell 5.1 | 48 pass, 2 skipped (the driver checks need PowerShell 7) | 48 pass, 2 skipped (the same) |
+| Linux: PowerShell 7.4.2 in Docker (WSL2), `/bin/sh` = dash | 46 pass, 4 skipped (two Windows-only Codex re-own checks; two git checks, as that image has no git) | 46 pass, 4 skipped (same) |
+| The same image with git installed | 48 pass, 2 skipped (the Codex re-own checks) | 48 pass, 2 skipped (same) |
 
 An earlier intermittent failure (twice on Windows PowerShell 5.1, once on Linux pwsh 7.4; only
 summary lines survived) was captured on 2026-09-28: the wake-up check, failing on unchanged

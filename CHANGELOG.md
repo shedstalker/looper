@@ -7,6 +7,19 @@ Looper was developed privately through v0.1.0 and v0.2.0. **Public distribution 
 v0.2.1**; the entries below v0.2.1 describe that development lineage, not earlier releases of the
 public repository.
 
+## v0.3.1 - Level 1 Deluxe
+
+Fixes from an outside review of the public v0.3.0:
+- `new` in a git worktree: the task folder is now excluded in the file git actually reads
+  (`git rev-parse --git-path info/exclude`, the main repository's), so `git status` no longer
+  shows `.looper/` there. Both helpers.
+- The Skill build replaces only a package it generated (or an empty folder), and never one that
+  holds the source it is running from or contains a link. Before, it deleted whatever `-Out`
+  named, so pointing it at the Looper repository, or a folder containing it, deleted the
+  checkout. That now holds through a junction or symlink too.
+- README Quick start: keep the task folder on a local disk, not in a cloud-synced folder.
+- Acceptance suite: 50 checks.
+
 ## v0.3.0 - Level 1 Deluxe
 
 Same Level 1 protocol and task folder. Adds a third runtime route and optional attachments for

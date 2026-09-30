@@ -24,7 +24,27 @@ $Out = [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location).ProviderPath, $O
 if ((Split-Path -Leaf $Out) -ne 'looper') { throw "The skill folder must be named 'looper' (the skill name); got $Out" }
 
 if (-not $Check) {
-if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Recurse -Force }
+if (Test-Path -LiteralPath $Out) {
+    # The output is replaced, so only delete what this script generated (SKILL.md plus its VERSION
+    # line) or an empty folder. Anything else - the repository or a folder containing it, however
+    # the path is spelled (junction, symlink, short name), or an unrelated folder - is refused.
+    $version = Join-Path $Out 'VERSION'
+    $generated = (Test-Path -LiteralPath (Join-Path $Out 'SKILL.md') -PathType Leaf) -and (Test-Path -LiteralPath $version -PathType Leaf) -and
+        ((Get-Content -LiteralPath $version -TotalCount 1) -like 'Generated from Looper*')
+    $empty = (Test-Path -LiteralPath $Out -PathType Container) -and @(Get-ChildItem -LiteralPath $Out -Force).Count -eq 0
+    if (-not ($generated -or $empty)) { throw "-Out $Out exists and is not a generated Looper skill, so it will not be replaced; choose another folder, or remove it yourself if it is an old copy." }
+    # Even a generated package must not hold this build's own source (e.g. a checkout placed inside
+    # it). Drop a unique marker next to this script and look for it in -Out; with no links inside
+    # -Out, that search sees every real file, whatever the paths are called.
+    $links = @(Get-ChildItem -LiteralPath $Out -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+    if ($links) { throw "-Out $Out contains a link ($($links[0].FullName)), so it will not be replaced; remove it yourself." }
+    $marker = Join-Path $PSScriptRoot ('.build-guard-' + [guid]::NewGuid().ToString('N'))
+    try { [IO.File]::WriteAllText($marker, '') } catch { throw "Cannot check that -Out $Out does not hold this repository (cannot write in $PSScriptRoot); remove the old package yourself." }
+    try { $holdsSource = @(Get-ChildItem -LiteralPath $Out -Recurse -Force -Filter (Split-Path -Leaf $marker)).Count -gt 0 }
+    finally { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
+    if ($holdsSource) { throw "-Out $Out holds this Looper repository, so it will not be replaced; choose a folder outside it." }
+    Remove-Item -LiteralPath $Out -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $Out 'docs') | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SKILL.md') -Destination $Out
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'agents') -Destination $Out -Recurse
