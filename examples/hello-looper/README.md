@@ -1,6 +1,6 @@
 # Example: hello-looper
 
-A real, unedited Looper run from 2026-09-27 (only driver lock and raw transcript files removed).
+A real, unedited Looper run from 2026-09-27 (only driver lock and raw transcript files, and one leftover publish temp file, removed).
 
 - **Task:** in a tiny git repo, change `value.txt` from `1` to `2`, change nothing else, commit locally.
 - **Worker:** a fresh Claude Code session (`claude -p`, model claude-opus-5), given only the

@@ -22,7 +22,9 @@ Both do the same thing. If neither can run, follow `<looper-home>/docs/contract.
 ## Answering
 
 - **Review requests.** Check the *actual* candidate yourself; do not accept the worker's claims.
-  For source, confirm the named commit/tree exists and is what you inspect. Run proportionate
+  For source, confirm the named commit/tree exists and is what you inspect. If the handoff lists
+  attachments, review the snapshots in `HISTORY/<number>_attachments/` (their SHA-256 is in the
+  handoff), not the originals, which may have changed or be out of reach. Run proportionate
   checks. Judge against PLAN's outcome, boundaries and proof - not whether the worker followed
   a particular method.
 - **Other requests** (research, compare, access). Do the work independently and report what you

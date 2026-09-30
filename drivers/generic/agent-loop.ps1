@@ -33,7 +33,7 @@ param(
     [string]$SessionPattern,
     # Output that means "this session cannot be resumed" (e.g. not found) - triggers a cold start.
     [string]$ResumeFailurePattern,
-    # What was asked for, e.g. 'model=gpt-6-sol effort=high' - logged as requested, not as fact.
+    # What was asked for, e.g. 'model=gpt-6.1-sol effort=high' - logged as requested, not as fact.
     [string]$Requested,
     # 'name=regex' pairs whose first group is what the runtime itself reports, e.g. 'model=^model: (\S+)'.
     [string[]]$Report = @(),

@@ -15,6 +15,10 @@ Looper to review its own development ([docs/history.md](docs/history.md),
 architecture: any capable agent can take either role.
 
 ```text
+worker --HANDOFF.md--> second agent --REVIEW.md--> worker --> ... --> PASS + FINAL_REPORT = done
+```
+
+```text
 .looper/
   CONTEXT.md        what this task is and what to read (start here after any restart)
   PLAN.md           outcome, context, boundaries, proof, escalation
@@ -29,16 +33,18 @@ architecture: any capable agent can take either role.
 
 ## What it is useful for
 
-- Claude Code writes code and Codex independently reviews it - or the other way round.
+- Claude Code writes code and Codex (or Grok through OpenCode) independently reviews it - or the other way round.
 - A local model (for example Qwen through OpenCode or Claude Code + Ollama) gives a cheap second opinion.
 - One agent researches or fetches something the worker cannot reach.
 - Independent test verification, comparison, or an alternative line of reasoning.
+- A second opinion on an important checkpoint: two reviewers, two task folders, one combined answer.
 - Work that continues after either session disappears.
 
 ## Quick start
 
-Both agents must run somewhere that can read and write your project folder (a CLI agent, or a
-desktop app with local file access); an ordinary browser chat cannot reach local files. The
+Both agents must run somewhere with local file access (a CLI agent, or a desktop app with local
+file access); an ordinary browser chat cannot reach local files. The worker reads and writes your
+project; the second agent only needs to read it and write its answer in the task folder. The
 Windows examples use `C:\Projects\Looper` and PowerShell; macOS/Linux is shown after the steps.
 
 1. **Get Looper** - download a release, or clone it and update it like any git repository:
@@ -74,8 +80,11 @@ Windows examples use `C:\Projects\Looper` and PowerShell; macOS/Linux is shown a
      pwsh -File C:\Projects\Looper\drivers\codex\run.ps1 -Loop <project>\.looper
      ```
 
-     Claude Code instead: `drivers\claude-code\run.ps1`. Drivers need PowerShell 7 (`pwsh`); see
-     [drivers/](drivers/README.md) for model, effort, sessions and local models.
+     Three runtimes have drivers: Claude Code (`drivers\claude-code\run.ps1`), Codex (above) and
+     OpenCode (`drivers\opencode\run.ps1 -Model <provider/model>`, the route for Grok, local
+     models and other providers). Drivers need PowerShell 7 (`pwsh`). [Pick a
+     runtime](drivers/README.md#pick-a-runtime) shows which models have actually passed a
+     Looper handoff, plus sign-in, cost and permission boundaries.
 
 4. **Check progress** at any time. `status` only reads the files and prints whose move it is
    (`NEXT: worker`, `reviewer` or `done`); it never starts an agent:
@@ -102,19 +111,33 @@ sh ~/Looper/tools/looper.sh status .looper                 # whose move is it? (
 pwsh -File ~/Looper/drivers/codex/run.ps1 -Loop .looper    # optional headless second agent
 ```
 
-## Releases
+## What has been tested - and what hasn't
 
-Looper was developed privately through v0.1.0 (Level 1 Basic) and v0.2.0 (Level 1 Deluxe).
-**Public distribution begins with v0.2.1**; the earlier versions are development lineage, not
-releases of the public repository.
+"Offered by a runtime" is not the same as "has passed a real Looper handoff". This table only
+counts the second.
 
-| Version | What it is |
-|---|---|
-| **v0.1.0 - Level 1 Basic** (private development release) | The original, deliberately minimal protocol: one bounded job, one worker, one independent second agent, ordinary files as durable state. Proved that sessions are disposable, stale answers cannot apply to new work, and interrupted reviews leave work due. |
-| **v0.2.0 - Level 1 Deluxe** (private development release) | The same protocol made comfortable for repeated real use: session resume, model and effort selection (requested vs. reported), visible/headless/manual modes, local-model routes, an Agent Skill, lifecycle cleanup and adapter hardening. |
-| **v0.2.1 - Level 1 Deluxe** (first public release) | v0.2.0 with documentation prepared for public distribution; no behaviour change. |
+| Runtime (driver) | Passed real Looper handoffs | Offered, not tested with Looper |
+|---|---|---|
+| **Claude Code** | Claude, as worker and reviewer; Qwen through Ollama (64k context) | other models it can reach |
+| **Codex CLI** | GPT (`gpt-6-sol`, `gpt-6.1-sol`), as reviewer many times and as worker | local models via `--oss`: tried, **failed** (the model could not use Codex's tools) |
+| **OpenCode** | Grok, as reviewer and worker (`xai/grok-4.7` requested with a SuperGrok sign-in; OpenCode does not report the model that answered); Qwen through Ollama (one review) | Gemini, and everything else `opencode models` lists |
+| Any other agent | not tested; the by-hand protocol it would follow was tested with all scripts removed (Claude and Codex) | its own |
 
-Nothing beyond Level 1 is implemented here. Details: [CHANGELOG.md](CHANGELOG.md).
+- **Checks without models:** 48 acceptance checks. Every check that applies passes on Windows
+  (PowerShell 7 and 5.1, Git Bash `sh`) and Linux (Docker: `pwsh`, `dash`); a few are
+  platform-specific and skip elsewhere ([details](docs/testing.md#deterministic-suite---testsacceptanceps1)).
+- **Live runs:** real, separate agents answering real handoffs, including repairs, crashes,
+  restarts, resumed and fresh sessions, two reviewers on one checkpoint, and three loops running
+  at once in real use.
+- **Limits:**
+  - Looper is a mailbox, not a sandbox: the runtime's own permissions are the boundary, and
+    OpenCode's are rules rather than a sandbox.
+  - The longest runs are under an hour.
+  - macOS has not been run.
+  - Local models make a useful second opinion but are not yet trusted as the only reviewer.
+  - The Skill upload in ChatGPT has not been tried.
+
+Everything, including what failed: [docs/testing.md](docs/testing.md).
 
 ## How it works
 
@@ -125,6 +148,9 @@ Nothing beyond Level 1 is implemented here. Details: [CHANGELOG.md](CHANGELOG.md
   leaves the work due for the next attempt, and restarts need no recovery step.
 - Publishing is atomic (temp file + rename) and logged to HISTORY. Stale answers are refused;
   unchanged handoffs stay quiet.
+- For files outside Git (a document, an export), `publish ... handoff -Attach <file>` snapshots
+  them into HISTORY and lists each one's size and SHA-256 in the handoff. The reviewer reads the
+  snapshot, so a file it can't reach, or one still syncing, doesn't matter.
 - Wake-ups only move attention; they never judge work or edit source.
 - The whole protocol also works by hand, with no scripts at all ([docs/contract.md](docs/contract.md)).
 - Looper grants no authority. A PASS is evidence about an exact candidate, not permission to
@@ -154,6 +180,15 @@ source of truth, and Looper provides the durable, bounded handoff.
 
 More in [docs/history.md](docs/history.md): origins, lineage and the lessons behind each design choice.
 
+## Releases
+
+- **v0.1.0 - Level 1 Basic** and **v0.2.0 - Level 1 Deluxe**: private development releases.
+- **v0.2.1 - Level 1 Deluxe**: the first public release (documentation only).
+- **v0.3.0 - Level 1 Deluxe**: the OpenCode driver (a third runtime route), attachments for
+  files outside Git, fixes found in real use, current model guidance.
+
+Nothing beyond Level 1 is implemented here. What each version delivered: [CHANGELOG.md](CHANGELOG.md).
+
 ## Learn more
 
 | | |
@@ -161,8 +196,10 @@ More in [docs/history.md](docs/history.md): origins, lineage and the lessons beh
 | [CONTEXT.md](CONTEXT.md) | Router for agents working on or with Looper |
 | [docs/contract.md](docs/contract.md) | The Level 1 contract: files, identity, due rule, publishing, lifecycle |
 | [prompts/](prompts/) | Worker and second-agent (reviewer) role instructions |
-| [drivers/](drivers/README.md) | Running each role: visible, headless or manual; model and effort; sessions; local models |
-| [drivers/others.md](drivers/others.md) | Other agent CLIs (OpenCode, Qwen Code, Copilot CLI, Gemini CLI, ...) |
+| [drivers/](drivers/README.md) | Picking a runtime (Claude Code, Codex, OpenCode); running each role visible, headless or manual; model and effort; sessions; local models |
+| [drivers/others.md](drivers/others.md) | Other agent CLIs we checked, and why only three runtimes have drivers |
+| [integrations/host-snippet.md](integrations/host-snippet.md) | A paragraph to paste into another system's prompts so its agents ask for review at the right moments |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Reporting a problem, proposing a change, running the checks |
 | [examples/hello-looper](examples/hello-looper/) | A complete real run |
 | [docs/testing.md](docs/testing.md) | What has been proven, and how - including what failed |
 
@@ -190,8 +227,10 @@ The skill is a generated copy of this repository's files, never a separate versi
 
 `shedstalker/looper` is the public release and product repository. Development and release
 qualification happen separately, in the maintainers' development repository. Issues and
-suggestions are welcome here; proposed code changes are treated as proposals, incorporated through
-that development process, and come back in a reviewed release.
+suggestions are welcome; proposed code changes are treated as proposals, incorporated through
+that development process, and come back in a reviewed release. Open an issue at
+[github.com/shedstalker/looper/issues](https://github.com/shedstalker/looper/issues); how to report a
+problem so it can actually be fixed: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

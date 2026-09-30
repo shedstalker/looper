@@ -4,19 +4,16 @@ Surveyed 2026-09-27 from each project's current documentation, plus live tests w
 An agent fits Looper naturally when it can run headless in a chosen directory with a prompt,
 read/write files and run a shell (to call the helper), and ideally resume a session, select a
 model and report what it used. Looper needs none of this to work - any agent can be driven by
-hand with the one-line prompt - so this list only decides where a driver script is worth having.
+hand with the one-line prompt. Looper keeps drivers for three runtimes only (Claude Code, Codex,
+OpenCode); this list records what else was checked and why it is not included.
 
 ## Tested
 
-**OpenCode** (`opencode run`, v1.18.32) - the best fit found. `--dir`, `-s <session>` (resume),
-`-m provider/model`, `--variant` (effort), `--format json` (session id in events), `--auto`
-(approve permissions), native Windows/macOS/Linux, and Ollama as an ordinary provider.
-Live test (E10): in a throwaway Linux container, `opencode run --dir <task> -m
-ollama/<qwen3.6 64k> --auto --format json "<one-line reviewer prompt>"` against the host's
-Ollama published a correct REPAIR (ran the script, 9 vs 15, right root cause) in 70 s - the
-fastest local route tested. Its JSON events carry the session id but not the model used. No
-driver script is included yet: the command above is the whole
-adapter, and one run is not enough evidence to maintain one. Ollama provider config for OpenCode:
+**OpenCode** (`opencode run`, v1.18.32) - the best fit found, now a provided driver:
+[`opencode/`](opencode/README.md). It is documented for Windows, macOS and Linux and was tested
+here natively on Windows and in Linux containers. It treats
+Grok (SuperGrok sign-in) and Ollama as ordinary providers. Tested with Grok as reviewer and worker
+(E14-E17) and with local Qwen (E10). Ollama provider config for OpenCode:
 
 ```json
 {"provider": {"ollama": {"npm": "@ai-sdk/openai-compatible", "name": "Ollama",
@@ -33,7 +30,9 @@ adapter, and one run is not enough evidence to maintain one. Ollama provider con
 | Gemini CLI | `-p`, stdin | `--resume <id>` | `-m` / settings only | `--approval-mode yolo` | yes | no Ollama; generous free tier |
 | Cline CLI | `cline "<task>"` | `--id` | `-m` / `--thinking` | auto-approve by default | NDJSON | Windows support not clearly documented |
 
-Each would be a ~50-line `run.ps1` like `codex/run.ps1`. Add one when someone actually uses it.
+None of these gets a driver: Looper's drivers are limited to Claude Code, Codex and OpenCode.
+Use another CLI by hand with the one-line prompt. To reach a model these CLIs offer (Gemini, Qwen,
+...), use OpenCode's provider for it where OpenCode supports it cleanly.
 
 ## Poor fits
 

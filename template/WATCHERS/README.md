@@ -11,4 +11,5 @@ restarted agent or a human can see it and start it again the same way:
   one-line prompt; or manual)
 
 Runtime files a driver may leave here: `<role>.lock` (held while a driver runs; released by the
-OS if it dies), `<role>.log` (one line per attempt), `<role>-last.txt` (last child output).
+OS if it dies), `<role>.log` (one line per attempt), `<role>-last.txt` and `-last.err` (last child
+output), `<role>.session` (the session to resume), `.<role>-prompt.txt` (the prompt passed).

@@ -5,7 +5,7 @@
 
 .EXAMPLE
   pwsh -File drivers/claude-code/run.ps1 -Loop C:\work\app\.looper              # reviewer (resumes its session across handoffs)
-  pwsh -File drivers/claude-code/run.ps1 -Loop C:\work\app\.looper -Model claude-opus-5 -Effort high -Session resume
+  pwsh -File drivers/claude-code/run.ps1 -Loop C:\work\app\.looper -Model claude-opus-5-5 -Effort high -Session resume
   pwsh -File drivers/claude-code/run.ps1 -Loop C:\work\app\.looper -Role worker
   pwsh -File drivers/claude-code/run.ps1 -Loop C:\work\app\.looper -Local qwen36-64k     # local model via Ollama
 
@@ -21,7 +21,7 @@ param(
     [Parameter(Mandatory)][string]$Loop,
     [ValidateSet('reviewer', 'worker')][string]$Role = 'reviewer',
     [string]$Model,
-    [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$Effort = '',
+    [string]$Effort = '',   # passed through; Claude Code validates (e.g. low, medium, high, xhigh, max)
     [ValidateSet('fresh', 'resume')][string]$Session = 'resume',
     [string]$Local,
     [string]$Claude,
@@ -41,8 +41,11 @@ if (-not $Claude) {
     }
 }
 
+# -Local changes these for the child; restored below so a run in the caller's session leaves no trace.
+$callerEnv = @{}
+foreach ($n in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY') { $callerEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
 if ($Local) {
-    # Ollama serves an Anthropic-compatible API; these reach only the child process.
+    # Ollama serves an Anthropic-compatible API.
     $env:ANTHROPIC_BASE_URL = if ($env:OLLAMA_HOST) { "http://$($env:OLLAMA_HOST -replace '^https?://', '')" } else { 'http://localhost:11434' }
     $env:ANTHROPIC_AUTH_TOKEN = 'ollama'
     $env:ANTHROPIC_API_KEY = ''
@@ -60,6 +63,7 @@ if ($Model) { $common += @('--model', $Model) }
 if ($Effort) { $common += @('--effort', $Effort) }
 $common += @([regex]::Matches($Extra, '"([^"]*)"|''([^'']*)''|(\S+)') | ForEach-Object { ($_.Groups[1..3] | Where-Object Success | Select-Object -First 1).Value })
 
+try {
 $requested = "model=$(if ($Model) { $Model } else { '(claude default)' }) effort=$(if ($Effort) { $Effort } else { '(claude default)' })$(if ($Local) { ' provider=ollama' })"
 & (Join-Path $PSScriptRoot '../generic/agent-loop.ps1') -Loop $Loop -Role $Role -Exe $Claude `
     -Arguments $common -ResumeArguments ($common + @('--resume', '{SESSION}')) -Session $Session `
@@ -68,4 +72,6 @@ $requested = "model=$(if ($Model) { $Model } else { '(claude default)' }) effort
     -AttachHint 'claude --resume {SESSION}' `
     -WorkingDirectory $(if ($Role -eq 'reviewer') { 'LOOP' } else { 'PROJECT' }) `
     -AttemptTimeoutMinutes $AttemptTimeoutMinutes -MaxFailures $MaxFailures -Show:$Show -Once:$Once
-exit $LASTEXITCODE
+$code = $LASTEXITCODE
+} finally { foreach ($n in $callerEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $callerEnv[$n]) } }
+exit $code

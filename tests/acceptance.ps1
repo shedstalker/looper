@@ -19,6 +19,7 @@ $helperKind = $Helper
 $helperPath = Join-Path $repo "tools/looper.$Helper"
 $ps1Helper = Join-Path $repo 'tools/looper.ps1'   # drivers are PowerShell
 $agentLoop = Join-Path $repo 'drivers/generic/agent-loop.ps1'
+$opencodeRun = Join-Path $repo 'drivers/opencode/run.ps1'
 $shell = (Get-Process -Id $PID).Path
 $script:failed = 0
 
@@ -100,8 +101,8 @@ Check 'review that only mentions a handoff as "previous" does not bind' {
 }
 Check 'reviewer REPAIR (soft format: heading + bold + lowercase) binds and hands back to worker' {
     Draft REVIEW "# Review`n`n## Verdict`n`n**repair**`n`n- **Reviewed handoff**: ``$(Id)```n- value.txt should be 2, not 3`n"
-    $null = Looper publish $loop review
-    ($code -eq 0) -and ((Next) -eq 'worker') -and ((Looper status $loop) -match 'review:  REPAIR for handoff 001') -and
+    $out = Looper publish $loop review
+    ($code -eq 0) -and ($out -match 'NEXT: worker') -and ((Next) -eq 'worker') -and ((Looper status $loop) -match 'review:  REPAIR for handoff 001') -and
     (Test-Path (Join-Path $loop 'HISTORY/001_REVIEW.md'))
 }
 Check 'repair: new handoff makes the reviewer due again' {
@@ -182,10 +183,10 @@ Check 'done: final handoff (after the report) + PASS -> NEXT done, wait exits 2'
     Draft HANDOFF "Request: final review`nCandidate: value.txt = 2, plus FINAL_REPORT.md`n"
     $null = Looper publish $loop handoff
     Draft REVIEW "Verdict: PASS`nHandoff: $(Id)`n"
-    $null = Looper publish $loop review
+    $published = Looper publish $loop review   # the publish message itself reports done
     $null = Looper wait $loop -For reviewer -TimeoutMinutes 0.05
     $waitCode = $code
-    ((Next) -eq 'done') -and ($waitCode -eq 2)
+    ((Next) -eq 'done') -and ($waitCode -eq 2) -and ($published -match 'NEXT: done')
 }
 
 # A non-review request: the answer needs only the handoff identity, no verdict.
@@ -199,6 +200,82 @@ Check 'research request: a plain answer without a verdict settles the handoff' {
     $null = Looper publish $loop3 review
     $s = Looper status $loop3
     ($code -eq 0) -and ($s -match 'review:  ANSWER for handoff 001') -and ($s -match '(?m)^NEXT: worker')
+}
+
+# Attachments: files outside Git, snapshotted into HISTORY and listed in the handoff.
+$loop7 = Join-Path $Scratch 'attach/.looper'
+$null = Looper new $loop7 -Project (Join-Path $Scratch 'attach')
+$docs = Join-Path $Scratch 'docs'; New-Item -ItemType Directory -Force $docs | Out-Null
+$brief = Join-Path $docs 'brief one.md'; $export = Join-Path $docs 'export.bin'
+[IO.File]::WriteAllText($brief, "brief v1`n"); [IO.File]::WriteAllBytes($export, [byte[]](0, 1, 2, 255))
+function Draft7 { [IO.File]::WriteAllText((Join-Path $loop7 'EXCHANGE/HANDOFF.next.md'), "Request: review`nCandidate: the attached brief`n") }
+function Hist7 { @(Get-ChildItem (Join-Path $loop7 'HISTORY') -Name | Sort-Object) -join ',' }
+Check 'attach: files are snapshotted into HISTORY/001_attachments and listed with size and SHA-256' {
+    Draft7
+    $null = Looper publish $loop7 handoff -Attach "$brief,$export"
+    $text = [IO.File]::ReadAllText((Join-Path $loop7 'EXCHANGE/HANDOFF.md'))
+    $snap = Join-Path $loop7 'HISTORY/001_attachments'
+    ($code -eq 0) -and ((Sha "$snap/brief one.md") -eq (Sha $brief)) -and ((Sha "$snap/export.bin") -eq (Sha $export)) -and
+    $text.Contains("- ``brief one.md``: 9 bytes, sha256 $(Sha $brief)") -and $text.Contains("- ``export.bin``: 4 bytes, sha256 $(Sha $export)")
+}
+Check 'attach: same text and files stay quiet; an edited file makes a new handoff with its own snapshot' {
+    Draft7; $quiet = Looper publish $loop7 handoff -Attach "$brief,$export"; $quietCode = $code
+    [IO.File]::WriteAllText($brief, "brief v2`n")
+    Draft7; $null = Looper publish $loop7 handoff -Attach "$brief,$export"
+    ($quietCode -eq 0) -and ($quiet -match 'unchanged') -and ($code -eq 0) -and
+    ((Hist7) -eq '001_attachments,001_HANDOFF.md,002_attachments,002_HANDOFF.md') -and
+    ((Sha (Join-Path $loop7 'HISTORY/002_attachments/brief one.md')) -eq (Sha $brief))
+}
+Check 'attach: a missing file or a failed publish leaves no handoff and no snapshot' {
+    $before = Hist7
+    Draft7; $null = Looper publish $loop7 handoff -Attach (Join-Path $docs 'missing.md'); $missingCode = $code
+    $handoff = Join-Path $loop7 'EXCHANGE/HANDOFF.md'; $saved = [IO.File]::ReadAllBytes($handoff)
+    Remove-Item $handoff; New-Item -ItemType Directory -Path $handoff | Out-Null   # unreplaceable target
+    try {
+        [IO.File]::WriteAllText($brief, "brief v3`n")
+        Draft7; $null = Looper publish $loop7 handoff -Attach $brief
+        ($missingCode -ne 0) -and ($code -ne 0) -and ((Hist7) -eq $before)
+    } finally {
+        Remove-Item $handoff -Recurse -Force; [IO.File]::WriteAllBytes($handoff, $saved)
+        Remove-Item (Join-Path $loop7 'EXCHANGE/HANDOFF.next.md') -ErrorAction SilentlyContinue
+    }
+}
+Check 'attach: a failed HISTORY write leaves no snapshot, keeps the draft and current handoff; the retry works' {
+    $obstacle = Join-Path $loop7 'HISTORY/003_HANDOFF.md'
+    $current = Sha (Join-Path $loop7 'EXCHANGE/HANDOFF.md')
+    New-Item -ItemType Directory -Path $obstacle | Out-Null   # the history copy cannot be written
+    [IO.File]::WriteAllText($brief, "brief v4`n")
+    Draft7; $null = Looper publish $loop7 handoff -Attach $brief; $failCode = $code
+    $clean = -not (Test-Path (Join-Path $loop7 'HISTORY/003_attachments')) -and (Test-Path (Join-Path $loop7 'EXCHANGE/HANDOFF.next.md')) -and
+        ((Sha (Join-Path $loop7 'EXCHANGE/HANDOFF.md')) -eq $current)
+    Remove-Item $obstacle
+    $null = Looper publish $loop7 handoff -Attach $brief   # the kept draft, once the obstacle is gone
+    ($failCode -ne 0) -and $clean -and ($code -eq 0) -and
+    ((Sha (Join-Path $loop7 'HISTORY/003_attachments/brief one.md')) -eq (Sha $brief))
+}
+Check 'attach: restoring the latest handoff reuses its snapshot; the next changed file makes the next handoff' {
+    Remove-Item (Join-Path $loop7 'EXCHANGE/HANDOFF.md')   # the current copy was lost
+    Draft7; $restored = Looper publish $loop7 handoff -Attach $brief; $restoreCode = $code
+    $afterRestore = Hist7
+    $v4 = Sha $brief
+    [IO.File]::WriteAllText($brief, "brief v5`n")
+    Draft7; $null = Looper publish $loop7 handoff -Attach $brief
+    ($restoreCode -eq 0) -and ($restored -match 'published handoff 003') -and ($afterRestore -notmatch '004') -and ($code -eq 0) -and
+    ((Sha (Join-Path $loop7 'HISTORY/003_attachments/brief one.md')) -eq $v4) -and
+    ((Sha (Join-Path $loop7 'HISTORY/004_attachments/brief one.md')) -eq (Sha $brief))
+}
+Check 'attach: restoring reuses only a byte-identical snapshot, whatever the file name (..evidence.bin)' {
+    $loop8 = Join-Path $Scratch 'attach-dots/.looper'
+    $null = Looper new $loop8 -Project (Join-Path $Scratch 'attach-dots')
+    $odd = Join-Path $docs '..evidence.bin'; [IO.File]::WriteAllBytes($odd, [byte[]](1, 2, 3))
+    $handoff = Join-Path $loop8 'EXCHANGE/HANDOFF.md'; $snap = Join-Path $loop8 'HISTORY/001_attachments/..evidence.bin'
+    function Draft8 { [IO.File]::WriteAllText((Join-Path $loop8 'EXCHANGE/HANDOFF.next.md'), "Request: review`nCandidate: evidence`n") }
+    Draft8; $null = Looper publish $loop8 handoff -Attach $odd; $firstCode = $code
+    Remove-Item $handoff; Draft8; $null = Looper publish $loop8 handoff -Attach $odd; $intactCode = $code   # intact: restored
+    Remove-Item $handoff; [IO.File]::WriteAllBytes($snap, [byte[]](9, 9, 9))                                 # tampered snapshot
+    Draft8; $null = Looper publish $loop8 handoff -Attach $odd
+    ($firstCode -eq 0) -and ($intactCode -eq 0) -and ($code -ne 0) -and -not (Test-Path $handoff) -and
+    (Test-Path (Join-Path $loop8 'EXCHANGE/HANDOFF.next.md')) -and (([IO.File]::ReadAllBytes($snap) -join ',') -eq '9,9,9')
 }
 
 # Driver behaviour, with a fake agent instead of a model.
@@ -232,6 +309,66 @@ Check 'driver: a fake reviewer that publishes is detected; the loop moves on' {
     ($LASTEXITCODE -eq 0) -and ((Get-Content -Raw (Join-Path $loop2 'WATCHERS/reviewer.log')) -match 'attempt published') -and
     ([regex]::Match((Looper status $loop2), '(?m)^NEXT: (\w+)').Groups[1].Value -eq 'worker')
 }
+Check 'opencode driver: guardrails reach the child, reviewer runs in the task folder (inside or outside the project), own keeps the caller''s rules, no leak' {
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { return 'skip' }   # drivers need PowerShell 7
+    $proj5 = Join-Path $Scratch 'oc'; $loop5 = Join-Path $proj5 '.looper'
+    $record = Join-Path $Scratch 'oc-env.txt'; $argsRecord = Join-Path $Scratch 'oc-args.txt'
+    # Drivers read CONTEXT paths with PowerShell, so these tasks come from the ps1 helper in both modes.
+    function Oc { & $shell -NoProfile -ExecutionPolicy Bypass -File $ps1Helper @args | Out-Null }
+    $outsideLoop = Join-Path $Scratch 'oc-tasks/median'   # a task folder outside the project
+    foreach ($l in $loop5, $outsideLoop) {
+        Oc new $l -Project $proj5
+        [IO.File]::WriteAllText((Join-Path $l 'EXCHANGE/HANDOFF.next.md'), "Request: review`nCandidate: $l`n")
+        Oc publish $l handoff
+    }
+    if ($IsWindows) {   # a fake opencode that records the rules and arguments it was given
+        $fake = Join-Path $Scratch 'fake-opencode.cmd'
+        Set-Content -LiteralPath $fake -Value "@`"$shell`" -NoProfile -Command `"[IO.File]::AppendAllText('$record', [string]`$env:OPENCODE_PERMISSION + [char]10)`"", "@echo %*>>`"$argsRecord`""
+    } else {
+        $fake = Join-Path $Scratch 'fake-opencode'
+        Set-Content -LiteralPath $fake -Value "#!/bin/sh`nprintf '%s\n' `"`$OPENCODE_PERMISSION`" >> '$record'`nprintf '%s\n' `"`$*`" >> '$argsRecord'"
+        & chmod +x $fake
+    }
+    $env:OPENCODE_PERMISSION = 'caller'
+    try {
+        foreach ($p in 'looper', 'own') { & $opencodeRun -Loop $loop5 -OpenCode $fake -Permission $p -Once -MaxFailures 1 | Out-Null }
+        & $opencodeRun -Loop $outsideLoop -OpenCode $fake -Once -MaxFailures 1 | Out-Null
+        $lines = @(Get-Content $record); $argLines = @(Get-Content $argsRecord)
+        $projRule = [regex]::Escape(([IO.Path]::GetFullPath($proj5)).Replace('\', '/') + '/**')
+        $inside = @(($lines[0] | ConvertFrom-Json).edit.PSObject.Properties | Where-Object Value -eq 'allow' | ForEach-Object Name)
+        $outside = @(($lines[2] | ConvertFrom-Json).edit.PSObject.Properties | Where-Object Value -eq 'allow' | ForEach-Object Name)
+        # OpenCode's wildcard: * matches anything. A rule must hit this task's files, never a look-alike.
+        function Hits([string[]]$Rules, [string]$Path) { @($Rules | Where-Object { $Path.Replace('\', '/') -like $_.Replace('\', '/') }).Count -gt 0 }
+        $own = ([IO.Path]::GetFullPath($loop5)).Replace('\', '/')
+        ($lines.Count -eq 3) -and ($lines[1] -eq 'caller') -and ($env:OPENCODE_PERMISSION -eq 'caller') -and
+        (Hits $inside "$own/EXCHANGE/REVIEW.next.md") -and (Hits $inside "$own/WATCHERS/scratch/probe.ps1") -and
+        -not (Hits $inside "$own/EXCHANGE/REVIEW.md") -and -not (Hits $inside "$proj5/sub/.looper/TASK.md") -and
+        (Hits $outside "$([IO.Path]::GetFullPath($outsideLoop))/TASK.md") -and -not (Hits $outside "$Scratch/oc-tasks/othermedian/TASK.md") -and
+        @($inside + $outside | Where-Object { $_.StartsWith('*') }).Count -eq 0 -and ($lines[2] -match $projRule) -and
+        ($argLines[0] -match ('--dir "?' + [regex]::Escape([IO.Path]::GetFullPath($loop5))))
+    } finally { Remove-Item Env:OPENCODE_PERMISSION -ErrorAction SilentlyContinue }
+}
+Check 'claude-code driver: -Local reaches the child and leaves the caller''s ANTHROPIC_* settings untouched' {
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { return 'skip' }   # drivers need PowerShell 7
+    $record = Join-Path $Scratch 'cc-env.txt'; $loop6 = Join-Path $Scratch 'cc/.looper'
+    & $shell -NoProfile -File $ps1Helper new $loop6 -Project (Join-Path $Scratch 'cc') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $loop6 'EXCHANGE/HANDOFF.next.md'), "Request: review`nCandidate: cc`n")
+    & $shell -NoProfile -File $ps1Helper publish $loop6 handoff | Out-Null
+    if ($IsWindows) {
+        $fake = Join-Path $Scratch 'fake-claude.cmd'
+        Set-Content -LiteralPath $fake -Value "@`"$shell`" -NoProfile -Command `"[IO.File]::AppendAllText('$record', [string]`$env:ANTHROPIC_BASE_URL + [char]10)`""
+    } else {
+        $fake = Join-Path $Scratch 'fake-claude'
+        Set-Content -LiteralPath $fake -Value "#!/bin/sh`nprintf '%s\n' `"`$ANTHROPIC_BASE_URL`" >> '$record'"
+        & chmod +x $fake
+    }
+    $saved = $env:ANTHROPIC_BASE_URL, $env:OLLAMA_HOST
+    $env:ANTHROPIC_BASE_URL = 'caller'; $env:OLLAMA_HOST = $null
+    try {
+        & (Join-Path $repo 'drivers/claude-code/run.ps1') -Loop $loop6 -Claude $fake -Local fake-model -Once -MaxFailures 1 | Out-Null
+        (@(Get-Content $record) -join ',') -eq 'http://localhost:11434' -and ($env:ANTHROPIC_BASE_URL -eq 'caller')
+    } finally { $env:ANTHROPIC_BASE_URL, $env:OLLAMA_HOST = $saved }
+}
 Check 'replay after done: an old handoff text cannot reopen and inherit a PASS' {
     Draft HANDOFF "Request: review`nCandidate: value.txt = 2 (repaired)`n"
     $null = Looper publish $loop handoff
@@ -261,10 +398,25 @@ Check 'clean: removes runtime files, keeps the record' {
     ($code -eq 0) -and ($left.Count -eq 0) -and -not (Test-Path (Join-Path $w4 'scratch')) -and (Test-Path (Join-Path $w4 'reviewer.log')) -and (Test-Path (Join-Path $w4 'README.md')) -and
     (Test-Path (Join-Path $loop4 'HISTORY/001_HANDOFF.md')) -and ((Looper status $loop4) -eq $before)
 }
-Check 'clean: refuses while a driver holds its lock' {
-    if ($helperKind -eq 'sh' -and -not (Get-Command flock -ErrorAction SilentlyContinue)) { return 'skip' }   # sh needs flock(1)
+Check 'clean: refuses while a driver holds its lock, and deletes nothing' {
+    # sh without flock(1): Git Bash checks the Windows lock directly; elsewhere it refuses.
+    [IO.File]::WriteAllText((Join-Path $w4 'reviewer.session'), 'x')
+    New-Item -ItemType Directory -Force -Path (Join-Path $w4 'scratch') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $w4 'scratch/in-progress.txt'), 'x')
     $lock = [IO.File]::Open((Join-Path $w4 'reviewer.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-    try { $null = Looper clean $loop4; $code -ne 0 } finally { $lock.Dispose(); Remove-Item (Join-Path $w4 'reviewer.lock') }
+    try { $null = Looper clean $loop4; $held = $code } finally { $lock.Dispose() }
+    $kept = (Test-Path (Join-Path $w4 'reviewer.session')) -and (Test-Path (Join-Path $w4 'scratch/in-progress.txt'))
+    $null = Looper clean $loop4   # released: cleans (sh without flock outside Windows still refuses)
+    ($held -ne 0) -and $kept
+}
+Check 'publish: an absolute draft path works, including a drive letter and spaces' {
+    $d = Join-Path $Scratch 'draft dir'; New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $abs = Join-Path $d 'custom draft.md'
+    [IO.File]::WriteAllText($abs, "Request: review`nCandidate: custom draft`n")
+    $null = Looper publish $loop4 handoff -Draft $abs; $first = $code
+    [IO.File]::WriteAllText($abs, "Request: review`nCandidate: custom draft, forward slashes`n")
+    $null = Looper publish $loop4 handoff -Draft ($abs -replace '\\', '/')
+    ($first -eq 0) -and ($code -eq 0) -and (Test-Path $abs)
 }
 $fakeAgent = Join-Path $Scratch 'fake-agent.ps1'
 Set-Content -LiteralPath $fakeAgent -Value @"
@@ -363,13 +515,13 @@ Check 'codex re-own: if the replace fails, the original stays in place and no te
 Check 'provider-neutral core: template, prompts, tools and contract name no provider' {
     $core = 'template', 'prompts', 'tools' | ForEach-Object { Join-Path $repo $_ }
     $files = @(Get-ChildItem $core -Recurse -File) + @(Get-Item (Join-Path $repo 'docs/contract.md'))
-    @($files | Select-String -Pattern 'codex|claude|openai|anthropic').Count -eq 0
+    @($files | Select-String -Pattern 'codex|claude|openai|anthropic|opencode|grok').Count -eq 0
 }
 Check 'privacy: no real user-profile paths in shipped files, docs, examples or evidence' {
     # Evidence keeps paths as C:\Users\<user>\...; anything else under C:\Users\ would leak a username.
-    $dirs = 'template', 'prompts', 'tools', 'drivers', 'integrations', 'docs', 'examples', 'tests/evidence' |
+    $dirs = 'template', 'prompts', 'tools', 'drivers', 'integrations', 'docs', 'examples', 'tests/evidence', '.github' |
         ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ }
-    $top = @('README.md', 'CONTEXT.md' | ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ })   # CONTEXT.md may be absent in an export
+    $top = @('README.md', 'CONTEXT.md', 'CHANGELOG.md', 'CONTRIBUTING.md' | ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ })   # CONTEXT.md may be absent in an export
     $files = @(Get-ChildItem $dirs -Recurse -File -Force) + @($top | ForEach-Object { Get-Item $_ })
     @($files | Select-String -Pattern '[A-Za-z]:[\\/]Users[\\/](?!<user>)[^\\/<>\s]+[\\/]').Count -eq 0
 }

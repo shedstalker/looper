@@ -4,13 +4,14 @@
 #   looper.sh new     <loop> [--task NAME] [--project DIR]   create a task folder from template/
 #   looper.sh status  <loop>                                 show whose move it is (changes nothing)
 #   looper.sh publish <loop> handoff|review [--draft FILE]   archive to HISTORY and publish atomically
+#             handoff only: [--attach FILE]...             snapshot files into HISTORY, list size + SHA-256
 #   looper.sh wait    <loop> --for worker|reviewer [--timeout-minutes N] [--poll-seconds N]
 #   looper.sh clean   <loop>                                 delete disposable runtime files (keeps the record)
 #
 # Never calls a model, never edits source, never judges work. Everything is derived from the
 # files (see docs/contract.md). wait exit codes: 0 due, 2 done, 3 timed out (wait again).
 # Needs: sh, cp, mv, awk, grep, sort, cmp, sha256sum or shasum. Options also accept the
-# PowerShell spellings (-Task, -Project, -Draft, -For, -TimeoutMinutes, -PollSeconds).
+# PowerShell spellings (-Task, -Project, -Draft, -Attach, -For, -TimeoutMinutes, -PollSeconds).
 set -u
 MARKER='<!-- looper:template -->'
 LOOPER_HOME=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -31,9 +32,11 @@ note() {
     rm -f "$T/$1"; i=0
     while [ $i -lt 5 ]; do
         [ -f "$2" ] || return 1
-        if cp "$2" "$T/$1.a" 2>/dev/null && sleep 0.15 && cp "$2" "$T/$1" 2>/dev/null; then
+        # cp -p keeps each copy's write time, taken from the file it read: a snapshot's time always
+        # belongs to its content, so the done rule compares snapshots, never a replaced file.
+        if cp -p "$2" "$T/$1.a" 2>/dev/null && sleep 0.15 && cp -p "$2" "$T/$1" 2>/dev/null; then
             [ -s "$T/$1" ] || { rm -f "$T/$1"; return 1; }
-            if cmp -s "$T/$1.a" "$T/$1"; then
+            if cmp -s "$T/$1.a" "$T/$1" && ! [ "$T/$1.a" -nt "$T/$1" ] && ! [ "$T/$1" -nt "$T/$1.a" ]; then
                 if grep -qF "$MARKER" "$T/$1"; then rm -f "$T/$1"; return 1; fi
                 return 0
             fi
@@ -113,6 +116,7 @@ state() {
     H=''; HSHORT=''; HNUM=''; VERDICT=''; RFOR=''; RNOTE=''; FINAL_OK=''
     if note h "$HANDOFF"; then
         H=$(sha "$T/h"); HSHORT=$(printf '%.12s' "$H"); HNUM=$(number_of "$H")
+        # A handoff written by hand may be missing from HISTORY; an answer naming it must still bind.
         grep -q " $H\$" "$T/known" || printf '0 %s\n' "$H" >> "$T/known"
     fi
     if note r "$REVIEW"; then
@@ -124,7 +128,7 @@ state() {
         NEXT=worker; WHY='no handoff published yet'
     elif [ -z "$RFOR" ] || [ "$RFOR" != "$H" ]; then
         NEXT=reviewer; WHY="handoff $HNUM $HSHORT has no applicable review"
-    elif [ "$VERDICT" = PASS ] && [ -n "$FINAL_OK" ] && ! [ "$FINAL" -nt "$HANDOFF" ]; then
+    elif [ "$VERDICT" = PASS ] && [ -n "$FINAL_OK" ] && ! [ "$T/f" -nt "$T/h" ]; then
         # Done only when the report existed before the handoff that passed, i.e. it was reviewed.
         NEXT=done; WHY="handoff $HNUM passed and FINAL_REPORT.md is written"
     else
@@ -143,9 +147,13 @@ write_atomic() {
 # history copy so that nothing is published.
 publish_pair() {
     existed=0; [ -f "$2" ] && existed=1
-    write_atomic "$1" "$2" || die "could not write $2"
+    if ! write_atomic "$1" "$2"; then
+        [ -n "$ATTACH_DIR" ] && rm -rf "$ATTACH_DIR"
+        die "could not write $2; nothing was published. Keep the draft and retry once the file is writable."
+    fi
     if ! write_atomic "$1" "$3"; then
         [ "$existed" = 1 ] || rm -f "$2"
+        [ -n "$ATTACH_DIR" ] && rm -rf "$ATTACH_DIR"
         die "could not replace $3; nothing was published. Keep the draft and retry once the file is writable."
     fi
 }
@@ -161,6 +169,30 @@ cmd_status() {
     printf 'NEXT: %s - %s\n' "$NEXT" "$WHY"
 }
 
+# Files outside Git (a document, an export): each is copied once into $T/att, and that copy is both
+# hashed and later snapshotted into HISTORY. The list is appended to the handoff text, so the id
+# changes whenever a file does; it names no number, so re-sending the same text and files is quiet.
+attach_files() {
+    rm -rf "$T/att"; mkdir "$T/att"; : > "$T/att.lines"
+    old_ifs=$IFS; nl='
+'
+    IFS=$nl
+    for a in $ATTACH; do
+        if [ -f "$a" ]; then list=$a; else list=$(printf '%s' "$a" | tr ',' '\n'); fi
+        for p in $list; do
+            [ -f "$p" ] || die "attachment not found (files only): $p"
+            name=$(basename -- "$p")
+            [ -e "$T/att/$name" ] && die "two attachments are named $name; rename one."
+            cp "$p" "$T/att/$name" || die "could not read $p"
+            printf -- '- `%s`: %s bytes, sha256 %s\n' "$name" "$(wc -c < "$T/att/$name" | tr -d ' ')" "$(sha "$T/att/$name")" >> "$T/att.lines"
+        done
+    done
+    IFS=$old_ifs
+    [ -z "$(tail -c 1 "$T/d")" ] || printf '\n' >> "$T/d"   # end the text with exactly one blank line
+    printf '\nAttachments (snapshots in `HISTORY/<number>_attachments/`, <number> being this handoff'"'"'s; review those, not the originals):\n' >> "$T/d"
+    cat "$T/att.lines" >> "$T/d"
+}
+
 cmd_publish() {
     case $KIND in handoff) NAME=HANDOFF ;; review) NAME=REVIEW ;; *) die 'publish needs a kind: handoff or review' ;; esac
     target="$EXCH/$NAME.md"; default="$EXCH/$NAME.next.md"; draft=${DRAFT:-$default}
@@ -168,6 +200,10 @@ cmd_publish() {
     [ -s "$draft" ] || die "draft $draft is empty."
     cp "$draft" "$T/d"
     grep -qF "$MARKER" "$T/d" && die "draft still contains the template marker $MARKER - write the real $KIND."
+    if [ -n "$ATTACH" ]; then
+        [ "$KIND" = handoff ] || die '-Attach is for handoffs only.'
+        attach_files
+    fi
     D=$(sha "$T/d"); DSHORT=$(printf '%.12s' "$D")
     known_list
 
@@ -181,9 +217,29 @@ cmd_publish() {
         # Identity is the text's hash, so identical text would inherit that handoff's old answer.
         earlier=$(awk -v s="$D" -v l="${last%% *}" '$2 == s && $1 != l { printf "%03d", $1; exit }' "$T/known")
         [ -n "$earlier" ] && die "this exact handoff text was already published as $earlier. A re-sent request must differ (e.g. say why it is sent again) so an old answer cannot settle it."
-        if [ -n "$last" ] && [ "${last#* }" = "$D" ]; then num=${last%% *}
+        restoring=''
+        if [ -n "$last" ] && [ "${last#* }" = "$D" ]; then num=${last%% *}; restoring=yes
         else num=$(awk 'BEGIN { m = 0 } $1 > m { m = $1 } END { print m + 1 }' "$T/known"); fi
         num=$(printf '%03d' "$num")
+        if [ -n "$ATTACH" ]; then
+            adir="$HIST/${num}_attachments"
+            if [ -e "$adir" ]; then
+                # Restoring the latest handoff (its EXCHANGE copy was lost): reuse its snapshot, but
+                # only if it holds exactly these files, byte for byte. Never touch it otherwise.
+                same=''
+                if [ -n "$restoring" ] && [ -d "$adir" ] && [ "$(ls -A "$adir" | wc -l)" -eq "$(ls -A "$T/att" | wc -l)" ]; then
+                    same=yes
+                    for f in "$T/att"/* "$T/att"/.[!.]* "$T/att"/..?*; do   # every name but . and ..
+                        [ -e "$f" ] || continue
+                        cmp -s "$f" "$adir/${f##*/}" || same=''
+                    done
+                fi
+                [ -n "$same" ] || die "$adir already exists and does not match these attachments; nothing was published."
+            else
+                ATTACH_DIR=$adir   # created here, so removed again if anything below fails
+                { mkdir "$adir" && cp -R "$T/att/." "$adir/"; } || { rm -rf "$adir"; die "could not write the attachment snapshot $adir; nothing was published."; }
+            fi
+        fi
         publish_pair "$T/d" "$HIST/${num}_HANDOFF.md" "$target"
         [ "$draft" = "$default" ] && rm -f "$draft"
         echo "LOOPER published handoff $num $DSHORT - NEXT: reviewer"
@@ -207,7 +263,8 @@ cmd_publish() {
     while [ -f "$hist" ] && [ "$(sha "$hist")" != "$D" ]; do hist="$HIST/${num}_REVIEW_$i.md"; i=$((i + 1)); done
     publish_pair "$T/d" "$hist" "$target"
     [ "$draft" = "$default" ] && rm -f "$draft"
-    echo "LOOPER published review $v for handoff $num $(printf '%.12s' "$H") - NEXT: worker"
+    state  # recompute NEXT: a PASS on the final handoff makes the task done
+    echo "LOOPER published review $v for handoff $num $HSHORT - NEXT: $NEXT"
 }
 
 cmd_wait() {
@@ -229,8 +286,14 @@ cmd_wait() {
 cmd_clean() {
     for lock in "$ROOT"/WATCHERS/*.lock; do
         [ -f "$lock" ] || continue
+        held="a driver is running (${lock##*/} is held); stop it before cleaning."
         if command -v flock >/dev/null 2>&1; then
-            flock -n "$lock" true 2>/dev/null || die "a driver is running (${lock##*/} is held); stop it before cleaning."
+            flock -n "$lock" true 2>/dev/null || die "$held"
+        else
+            case $(uname -s) in
+                MINGW* | MSYS* | CYGWIN*) ( : >> "$lock" ) 2>/dev/null || die "$held" ;;   # Windows: a held lock cannot be opened
+                *) die "cannot check ${lock##*/} without flock(1); nothing was cleaned. Use looper.ps1 clean (the drivers need PowerShell anyway)." ;;
+            esac
         fi
     done
     : > "$T/junk"
@@ -291,13 +354,15 @@ cmd_new() {
 }
 
 CMD=${1:-help}; [ $# -gt 0 ] && shift
-LOOP=.looper; KIND=''; TASK=''; PROJECT=''; DRAFT=''; FOR=''; TIMEOUT=720; POLL=5; pos=0
+LOOP=.looper; KIND=''; TASK=''; PROJECT=''; DRAFT=''; ATTACH=''; ATTACH_DIR=''; FOR=''; TIMEOUT=720; POLL=5; pos=0
 while [ $# -gt 0 ]; do
     opt=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
     case $opt in
         -task | --task) TASK=$2; shift 2 ;;
         -project | --project) PROJECT=$2; shift 2 ;;
         -draft | --draft) DRAFT=$2; shift 2 ;;
+        -attach | --attach) ATTACH="$ATTACH${ATTACH:+
+}$2"; shift 2 ;;
         -for | --for) FOR=$2; shift 2 ;;
         -timeoutminutes | --timeout-minutes) TIMEOUT=$2; shift 2 ;;
         -pollseconds | --poll-seconds) POLL=$2; shift 2 ;;
@@ -315,7 +380,7 @@ esac
 ROOT=$(CDPATH='' cd -- "$LOOP" && pwd)
 HANDOFF="$ROOT/EXCHANGE/HANDOFF.md"; REVIEW="$ROOT/EXCHANGE/REVIEW.md"; FINAL="$ROOT/FINAL_REPORT.md"
 HIST="$ROOT/HISTORY"; EXCH="$ROOT/EXCHANGE"
-[ -n "$DRAFT" ] && case $DRAFT in /*) ;; *) DRAFT="$PWD/$DRAFT" ;; esac
+[ -n "$DRAFT" ] && case $DRAFT in /* | [A-Za-z]:/* | [A-Za-z]:'\'*) ;; *) DRAFT="$PWD/$DRAFT" ;; esac   # absolute, including C:\ or C:/
 case $CMD in
     status) cmd_status ;;
     publish) cmd_publish ;;

@@ -24,7 +24,8 @@ preferably different models or providers, so the review is genuinely independent
   FINAL_REPORT.md        closeout (template until written)
   EXCHANGE/HANDOFF.md    worker's current request      (template until first publish)
   EXCHANGE/REVIEW.md     reviewer's current answer     (template until first publish)
-  HISTORY/               NNN_HANDOFF.md, NNN_REVIEW.md - every published exchange, in order
+  HISTORY/               NNN_HANDOFF.md, NNN_REVIEW.md - every published exchange, in order;
+                         NNN_attachments/ - snapshots of a handoff's attached files
   WATCHERS/              wake-up notes, driver locks and logs
 ```
 
@@ -85,6 +86,15 @@ Consequences, by construction:
      then replace `EXCHANGE/REVIEW.md`.
    - "replace" = write a temp file in the same folder and rename it over the target, so a
      reader sees the old or the new file, never half of one.
+   - handoff with **attachments** (optional; for files outside Git, such as a document or an
+     export): copy each file into `HISTORY/NNN_attachments/` and append to the handoff text a
+     list of each file's name, size in bytes and SHA-256, before the checks above. The list is
+     part of the handoff's bytes, so a changed file means a new handoff. It names no number, so
+     the same text and files stay quiet. The reviewer reviews the snapshots, which cannot change
+     or lag behind a sync. `publish ... handoff -Attach <file>,...` does all of this; if anything
+     fails, it publishes nothing and leaves no new snapshot. Re-publishing the latest handoff
+     (its `EXCHANGE` copy lost) reuses its snapshot only if it holds exactly the same bytes;
+     otherwise it refuses and leaves the saved snapshot alone.
 3. Only the worker writes handoffs; only the reviewer writes reviews. Both may write TASK.md.
 
 By hand, any shell will do: the id is the first 12 hex digits of `sha256sum HANDOFF.md`
@@ -103,7 +113,9 @@ sync clients can delay, duplicate or reorder renames and file events.
   `WATCHERS/` (locks, `*.session` ids, last-run output, prompt files, and `WATCHERS/scratch/` for
   an agent's throwaway work), `EXCHANGE/*.next.md` drafts,
   and `.*.tmp` files left by an interrupted publish. Deleting it never changes whose move it is.
-  `looper clean <folder>` does exactly this and refuses while a driver holds its lock; drivers
+  `looper clean <folder>` does exactly this and refuses while a driver holds its lock (`looper.sh`
+  checks with `flock(1)`, or the Windows lock itself under Git Bash; elsewhere without `flock` it
+  refuses to clean); drivers
   also remove their own session and last-output files, and `WATCHERS/scratch/`, when the task is done.
 - **One folder per task.** A new session - after a restart, a deleted chat or a new day - continues
   the existing folder; `new` refuses to create a second one there. For the next task in the same

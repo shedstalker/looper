@@ -7,7 +7,8 @@ the final verdict lives in REVIEW.md, so do not edit this report after the final
 makes it unreviewed again and the task is no longer done).
 
 - Task and outcome:
-- Status: SATISFIED / PARTIAL / BLOCKED - why
+- Status: SATISFIED / PARTIAL / BLOCKED - why (your claim; the final review confirms or rejects it,
+  so no "if it passes")
 - Final candidate: (commit/tree, file set or other exact state)
 - Work done:
 - Not done / parked:

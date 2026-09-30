@@ -1,0 +1,33 @@
+name: Problem or surprise
+description: Something Looper did (or didn't do) that you didn't expect
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste credentials, API keys, sign-in files (`auth.json`) or private task content.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Looper version
+      description: "`VERSION` in a Skill install, or `git describe --tags` in a clone"
+  - type: textarea
+    id: runtimes
+    attributes:
+      label: Runtime and model for each role
+      description: Claude Code, Codex CLI or OpenCode (and the model); visible, headless driver, or by hand; OS, shell and helper (looper.ps1 / looper.sh)
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `status` on the task folder
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant lines from WATCHERS/<role>.log (if a driver was involved)
+      render: text

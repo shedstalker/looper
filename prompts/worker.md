@@ -43,9 +43,16 @@ Git and the actual source over anything you remember.
 - Make the handoff unmistakable about *what exactly* is offered. For source, commit first and
   give the commit (and tree, `git rev-parse <commit>^{tree}`) - never offer a moving working
   tree. For other work, name the exact files or evidence. Say what to check and what proof you ran.
+- Files outside Git (a document, an export, a file the reviewer may not be able to reach):
+  attach them - `<helper> publish <folder> handoff -Attach <file>,<file>`. The helper snapshots
+  them into HISTORY and lists each one's size and SHA-256 in the handoff; the reviewer reads the
+  snapshots.
 - Never edit a published handoff in place; publish a new one. Never write `REVIEW.md`.
-- After publishing, arrange to be woken (`<helper> wait <folder> -For worker`, run in the
-  background if your agent supports that) and carry on with independent work meanwhile.
+- After publishing, arrange to be woken with `<helper> wait <folder> -For worker` (in the
+  background if your agent supports that) and carry on with independent work meanwhile. It
+  returns with the handoff number, id and verdict (exit 0; exit 2 = task done; exit 3 = timed
+  out, wait again). Don't read driver logs to detect an answer. If you started a reviewer driver
+  yourself, its exit code 5 means it gave up, and `WATCHERS/reviewer.log` says why.
 
 ## 4. When the answer arrives
 

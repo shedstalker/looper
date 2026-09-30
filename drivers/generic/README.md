@@ -16,7 +16,8 @@ few minutes). The first thing the role does is `status`; if nothing is due it st
 
 ## agent-loop.ps1 - headless agents
 
-For any CLI that accepts a prompt on stdin:
+The shared loop behind the three supported drivers (Claude Code, Codex, OpenCode). It works with
+any CLI that accepts a prompt on stdin, but other CLIs are not supported drivers:
 
 ```powershell
 pwsh -File drivers/generic/agent-loop.ps1 -Loop <folder> -Role reviewer -Exe <cli> -Arguments <args...>

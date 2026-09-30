@@ -33,11 +33,12 @@ than forcing one shell everywhere (Python is not installed by default on Windows
 remain PowerShell: they are an optional convenience. Manual operation remains possible anywhere.
 
 **D7 - Drivers are one generic loop plus thin provider wrappers.** *Why:* the wait/lock/run/retry
-logic is provider-neutral; a new provider only needs its command line. Adding a provider
-touches only `drivers/<provider>/`.
+logic is provider-neutral; a provider wrapper only needs its command line and touches only
+`drivers/<provider>/`. Which wrappers exist is limited by D24.
 
 **D8 - Fresh session per due item for headless roles.** *Why:* sessions are disposable, state is
 in files, and fresh contexts avoid compaction drift. Interactive sessions remain supported.
+(Superseded for the drivers: they resume by default, D14; `-Session fresh` keeps this option.)
 
 **D9 - The second agent is a general responder, named REVIEWER.** (User steer, 2026-09-27.)
 Handoffs may ask for review, research, comparison testing, or access the worker lacks (e.g. a
@@ -48,7 +49,8 @@ exchange shape and one due rule serve all request types; no new message types.
 next to the work, easy to find, never committed by accident, no tracked file changed.
 
 **D11 - The skill is generated from canonical files.** `integrations/skill/` holds only the
-SKILL.md source and a build script that bundles copies of `template/`, `prompts/` and `tools/`.
+SKILL.md source and a build script that bundles copies of `template/`, `prompts/` and `tools/`
+(later also drivers, the contract and the licence: D21).
 *Why:* no second implementation to maintain.
 
 **D12 - `done` needs the final report to predate the handoff that passed.** Found in a live
@@ -126,3 +128,34 @@ if people keep retyping long driver commands.
 runs) all handled "REVIEW.md = the answer" without confusion; one agent even added a verdict to a
 research answer. Renaming would break existing task folders for no observed benefit. The docs call
 it "the answer"; the only required line is `Handoff:`.
+
+**D24 - Three runtimes only: Claude Code, Codex CLI, OpenCode (owner, 2026-09-28).** Looper keeps
+drivers for these three and no others. A new model or provider (Grok, Gemini, local models, ...)
+is reached through OpenCode's own provider support (`-Model provider/model`); if OpenCode cannot
+support it cleanly, the limit is documented and nothing is built around it. No driver for other
+CLIs, no direct provider API integration. Any other agent can still take a role by hand. *Why:*
+the smallest useful tool; OpenCode already gives model breadth behind one driver (E14-E16).
+"OpenCode offers this model" is never the same as "this model passed a Looper handoff".
+
+**D25 - A second opinion is a second task folder, not a protocol.** Level 1 keeps one reviewer
+and one `REVIEW.md` per folder. For two independent answers on one checkpoint, the worker creates
+a second task folder for the same project, publishes the same handoff there, runs both reviewers,
+and combines their answers into its next handoff in the main task (E15). *Why:* it worked with no
+change to the contract, and a multi-reviewer protocol or queue would add machinery that one
+experiment does not justify.
+
+**D26 - Attachments for files outside Git (real use, 2026-09-30).** A worker offering a Drive
+document had to hand-write its size and SHA-256 into every handoff, and the reviewer's sandbox
+could not read the synced folder; a sync lag would have produced a false "hash differs". Now
+`publish ... handoff -Attach` reads each file once, hashes those bytes and snapshots the same
+bytes into `HISTORY/<number>_attachments/`, appending a name/size/SHA-256 list to the handoff
+text. *Why these details:* the list is part of the handoff's identity, so a changed file is a new
+handoff and an old answer cannot settle it. The list names neither the number nor the original
+path, so identical text and files stay quiet, and both helpers and all machines produce the same
+bytes. A failed publish leaves no new snapshot, and restoring the latest handoff reuses its
+snapshot only if it is byte-identical. *Not done:* no attachment verification command (the
+listed SHA-256 is enough to check by hand), no folders (zip them), no size limit (the snapshot is
+a plain copy). Also from the same use, documentation only: waiting with `wait -For worker`,
+session growth, launching a watchable driver, the report's status as a claim, and a host prompt
+snippet. A `-NewWindow` option and cumulative token totals in `status` were not added: the logs
+already hold the facts, and window management stays outside Looper.

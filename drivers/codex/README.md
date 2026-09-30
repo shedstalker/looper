@@ -1,12 +1,14 @@
 # Codex driver
 
-Checked with codex-cli 0.158 (September 2026). Flags change; check the current Codex CLI docs.
+Checked with codex-cli 0.158 and 0.159 (September 2026). Flags and models change; check the
+current Codex CLI docs. `gpt-6.1-sol` needed 0.159: 0.158 rejected it.
 
 ## Reviewer - headless (recommended)
 
 ```powershell
 pwsh -File drivers/codex/run.ps1 -Loop <folder>          # -Role reviewer is the default
-pwsh -File drivers/codex/run.ps1 -Loop <folder> -Model gpt-6-sol -Effort high -Show
+pwsh -File drivers/codex/run.ps1 -Loop <folder> -Model gpt-6.1-sol -Effort high -Show
+pwsh -File drivers/codex/run.ps1 -Loop <folder> -Session fresh -Effort xhigh      # a gate or the final review
 ```
 
 ```text
@@ -21,12 +23,19 @@ later runs: codex exec resume --skip-git-repo-check [...] -c sandbox_mode=worksp
 - `-Model` / `-Effort` are honoured per run; Codex prints the model, effort, sandbox and session
   it actually used, and the driver logs that next to what was requested.
 - `-Show` streams Codex's progress live and prints `codex resume <id>` to open the session.
-- `-Local <ollama-model>` runs the same agent on a local model (`--oss`). Wired and failing
-  safely, but the Qwen models tested could not use Codex's tools - see `drivers/README.md`.
+- `-Local <ollama-model>` runs the same agent on a local model (`--oss`), always with a fresh
+  session (`codex exec resume` cannot select the local provider). Wired and failing safely,
+  but the Qwen models tested could not use Codex's tools - see `drivers/README.md`.
 
 The sandbox makes the task folder the only writable place; the reviewer can read the project
-and run read-only checks. If it must build or test in a writable place, give it one:
-`-Extra:"--add-dir C:\scratch"`. The CLI is found on `PATH`, or on Windows in the Codex app's
+and run read-only checks. Not everything is readable, though: in real use on Windows the sandbox
+could not read a synced Google Drive for desktop folder. For files like that,
+the worker attaches them (`publish ... handoff -Attach <file>`), so the reviewer reads the
+snapshot inside the task folder. If it must build or test in a writable place, give it one:
+`-Extra:"-c sandbox_workspace_write.writable_roots=['C:\scratch']"`. `-Extra` reaches fresh and
+resumed runs alike, and `codex exec resume` accepts only some options (`-c`, `-m`, ...; not
+`--add-dir` or `--oss`), so pass settings as `-c` config (the `writable_roots` form was tested
+on both). The CLI is found on `PATH`, or on Windows in the Codex app's
 folder (`%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`); override with `-Codex <path>`.
 
 `codex review --commit <sha>` is a useful check a reviewer may run itself, but the Looper

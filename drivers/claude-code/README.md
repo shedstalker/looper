@@ -1,6 +1,7 @@
 # Claude Code driver
 
-Checked with Claude Code 2.1.278 (September 2026). Flags change; check the current Claude Code docs.
+Checked with Claude Code 2.1.278 (September 2026); `claude-opus-5-5` needs 2.1.280 or newer. Flags
+change; check the current Claude Code docs.
 
 ## Worker - visible interactive session (the usual way)
 
@@ -22,7 +23,7 @@ again. No model calls while waiting. A replaced session only needs:
 ```powershell
 pwsh -File drivers/claude-code/run.ps1 -Loop <folder>                    # reviewer
 pwsh -File drivers/claude-code/run.ps1 -Loop <folder> -Role worker
-pwsh -File drivers/claude-code/run.ps1 -Loop <folder> -Model claude-opus-5 -Effort high -Session fresh -Show
+pwsh -File drivers/claude-code/run.ps1 -Loop <folder> -Model claude-opus-5-5 -Effort high -Session fresh -Show
 ```
 
 - `-Session resume` (default) continues the role's Claude session (`--resume <id>`); if Claude
