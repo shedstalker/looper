@@ -7,6 +7,54 @@ Looper was developed privately through v0.1.0 and v0.2.0. **Public distribution 
 v0.2.1**; the entries below v0.2.1 describe that development lineage, not earlier releases of the
 public repository.
 
+## v0.4.1 - Level 1 Deluxe
+
+- The OpenCode driver is removed (D28): drivers remain for Claude Code and Codex CLI; other
+  agents take part by hand.
+
+- Skill packages record source provenance in `VERSION`, include hidden files on every OS, and
+  reject missing, extra or changed files in both the folder and zip during build and `-Check`.
+
+- Docs: driver READMEs merged; plan, final report, history and README trimmed
+
+- Git Bash/MSYS tasks record native paths for Windows drivers; cleanup holds driver locks through
+  deletion and keeps their files persistent. Preserve Unix path case and backslashes.
+- Reject UTF-16 drafts with UTF-8 guidance; fall back to polling when file watcher setup fails.
+- Skill builds expand literal `~/` and `~\` output paths. Runtime wrappers require PowerShell 7
+  (the generic loop retains its tested 5.1 path); Codex and Claude find Unix fallback executables.
+
+- Align helper validation, case handling, polling defaults, hidden-entry cleanup and verdict precedence;
+  both helpers refuse a missing project before creating a task folder. Both find the verdict with
+  the same two searches and one ASCII grammar, and accept one number syntax: decimal
+  `-TimeoutMinutes` (e.g. 0.5, not 1e1) and whole-number `-PollSeconds`.
+- Drivers preserve empty arguments; clarify extra-option quoting and align prompts/docs with the contract.
+
+- Both helpers replace orphan attachment snapshots and remove stale HISTORY temps when retrying
+  an interrupted publish (#2).
+- `looper.sh` hashes stdin so backslashes and newlines in file paths cannot corrupt SHA-256 ids (#3).
+- Both helpers escape literal task folder paths in git's info/exclude, including glob characters (#4).
+
+- Driver behaviour change for `-Once` callers: exit 6 means the attempt published nothing;
+  exit 7 means nothing was due (no waiting). Exit 0 means published or done, with done cleanup.
+  Watchers gain `-IdleExitMinutes` (default 0 = never); shutdown and timeouts reap the child tree.
+  On Unix the agent writes its output files directly (no pipes), so all output is kept and a
+  grandchild that holds them open cannot stall the driver.
+
+- publish is serialised per task folder with an OS-held lock (#1)
+- GitHub Actions CI runs both helpers on Windows, macOS and Linux, Windows PowerShell 5.1
+  on Windows, and the Skill build and zip checks.
+- `looper.sh clean` uses `pwsh` to check driver locks on Unix when `flock(1)` is absent.
+  A no-flock acceptance check covers refusal while held and cleanup after release.
+- Acceptance snapshot filters now match Windows path separators too.
+- macOS (found by CI): `looper.sh` failed to parse under bash 3.2 (`/bin/sh`), a `case` inside
+  `$( )`; `looper.ps1 new` wrote no git exclude where the path is a symlink (`/var` ->
+  `/private/var`). It now asks git for the folder's prefix, as `looper.sh` does, so both
+  helpers exclude the folder in the repository that contains it; git output is read as UTF-8,
+  so a non-ASCII folder name is excluded on Windows too.
+- Codex driver: `-Sandbox config` preserves the caller's profile/permission config; the default
+  stays `workspace-write`. Resumed workers' writable roots use TOML basic strings and precede
+  `-Extra`, so caller settings win. Covered by a fake-CLI acceptance check.
+
 ## v0.4.0 - Level 1 Deluxe
 
 The final report is now bound by hash, which changes how `done` is decided (backward

@@ -30,8 +30,9 @@ param(
     [string]$Draft,
     [string[]]$Attach,
     [ValidateSet('worker', 'reviewer')][string]$For,
-    [ValidateRange(0.01, 10080)][double]$TimeoutMinutes = 720,
-    [ValidateRange(1, 3600)][int]$PollSeconds = 30
+    # One number syntax in both helpers: decimal minutes, whole seconds; ranges are checked below.
+    [ValidatePattern('\A[0-9]+([.][0-9]+)?\z')][string]$TimeoutMinutes = '720',
+    [ValidatePattern('\A[0-9]+\z')][string]$PollSeconds = '30'
 )
 
 Set-StrictMode -Version Latest
@@ -39,10 +40,16 @@ $ErrorActionPreference = 'Stop'
 $Marker = '<!-- looper:template -->'
 $script:AttachDir = $null   # a publish's attachment snapshot folder, removed again if the publish fails
 $LooperHome = Split-Path -Parent $PSScriptRoot
+$pathComparison = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
 
 function Stop-Looper([string]$Message, [int]$Code = 1) {
     [Console]::Error.WriteLine("LOOPER ERROR: $Message")
     exit $Code
+}
+$waitMinutes = [double]::Parse($TimeoutMinutes, [Globalization.CultureInfo]::InvariantCulture)
+$pollSec = [double]::Parse($PollSeconds, [Globalization.CultureInfo]::InvariantCulture)
+if ($waitMinutes -lt 0.01 -or $waitMinutes -gt 10080 -or $pollSec -lt 1 -or $pollSec -gt 3600) {
+    Stop-Looper 'TimeoutMinutes must be 0.01..10080; PollSeconds must be a whole number 1..3600.'
 }
 
 function Get-Sha([byte[]]$Bytes) {
@@ -102,7 +109,7 @@ function Get-Note([string]$Path) {
 
 function Get-ReportSha([string]$Text) {
     # The final report a handoff names (publish adds the line when the report is written), or $null.
-    $m = [regex]::Matches($Text, '(?m)^Final report: `FINAL_REPORT\.md`, sha256 ([0-9a-f]{64})\s*$')
+    $m = [regex]::Matches($Text, '(?m)^Final report: `FINAL_REPORT\.md`, sha256 ([0-9a-f]{64})[ \t\r\n\f\v]*$')   # ASCII spaces, as looper.sh
     if ($m.Count) { $m[$m.Count - 1].Groups[1].Value } else { $null }
 }
 
@@ -120,7 +127,7 @@ function Get-Paths([string]$Root) {
 function Get-HistoryHandoffs($P) {
     # Published handoffs in order: number, sha. HISTORY is the complete exchange log.
     if (-not [IO.Directory]::Exists($P.History)) { return @() }
-    @(Get-ChildItem -LiteralPath $P.History -File | Where-Object Name -Match '^(\d+)_HANDOFF\.md$' |
+    @(Get-ChildItem -LiteralPath $P.History -File | Where-Object Name -CMatch '^([0-9]+)_HANDOFF\.md$' |
         Sort-Object { [int]($_.Name -replace '_.*$', '') } | ForEach-Object {
             [pscustomobject]@{ Number = [int]($_.Name -replace '_.*$', ''); Sha = Get-Sha ([IO.File]::ReadAllBytes($_.FullName)) }
         })
@@ -128,9 +135,12 @@ function Get-HistoryHandoffs($P) {
 
 function Get-Verdict([string]$Text) {
     # Soft format: "Verdict: PASS", "**Verdict:** repair", or a Verdict heading with the word below it.
-    $m = [regex]::Match($Text, '(?im)^[\s>*_#-]*verdict[\s*_]*[:=-]?[\s*_`]*(PASS|REPAIR|BLOCKED)\b')
+    # One ASCII grammar, as in looper.sh: fold only A-Z, then match exactly.
+    $Text = [regex]::Replace($Text, '[A-Z]+', { param($m) $m.Value.ToLowerInvariant() })
+    $s = ' \t\r\n\f\v'; $end = '(pass|repair|blocked)(?![a-z0-9_])'
+    $m = [regex]::Match($Text, '(?m)^[' + $s + '>*_#-]*verdict[' + $s + '*_]*[-:=]?[' + $s + '*_`]*' + $end)
     if (-not $m.Success) {
-        $m = [regex]::Match($Text, '(?im)^[\s>*_#-]*verdict[\s*_:]*\r?\n(?:[ \t]*\r?\n)*[\s>*_#`-]*(PASS|REPAIR|BLOCKED)\b')
+        $m = [regex]::Match($Text, '(?m)^[' + $s + '>*_#-]*verdict[' + $s + '*_:]*\r?\n(?:[ \t]*\r?\n)*[' + $s + '>*_#`-]*' + $end)
     }
     if ($m.Success) { return $m.Groups[1].Value.ToUpperInvariant() }
     return ''
@@ -143,9 +153,10 @@ function Get-Binding([string]$Text, $Known) {
     foreach ($line in ($Text -split '\r?\n')) {
         $colon = $line.IndexOf(':')
         if ($colon -lt 0) { continue }
-        $label = $line.Substring(0, $colon)
-        if ($label -notmatch '(?i)\bhandoff\b' -or $label -match '(?i)\b(previous|prior|earlier|old|last)\b') { continue }
-        foreach ($token in [regex]::Matches($line.Substring($colon + 1), '\b[0-9a-fA-F]{12,64}\b')) {
+        # The verdict's ASCII grammar, as looper.sh: fold only A-Z; words end at anything but [a-z0-9_].
+        $label = [regex]::Replace($line.Substring(0, $colon), '[A-Z]+', { param($m) $m.Value.ToLowerInvariant() })
+        if ($label -cnotmatch '(?<![a-z0-9_])handoff(?![a-z0-9_])' -or $label -cmatch '(?<![a-z0-9_])(previous|prior|earlier|old|last)(?![a-z0-9_])') { continue }
+        foreach ($token in [regex]::Matches($line.Substring($colon + 1), '(?<![A-Za-z0-9_])[0-9a-fA-F]{12,64}(?![A-Za-z0-9_])')) {
             $prefix = $token.Value.ToLowerInvariant()
             $found += @($Known | Where-Object { $_.Sha.StartsWith($prefix) })
         }
@@ -242,6 +253,20 @@ function Assert-Loop([string]$Root) {
     }
 }
 
+function Get-GitLine([string]$Dir, [string]$Arguments) {
+    # git's one-line answer in $Dir, or $null (no git, not a repository). Read as UTF-8, which git
+    # prints: `& git` would decode with the console code page (OEM on Windows) and corrupt non-ASCII.
+    try {
+        $psi = [Diagnostics.ProcessStartInfo]::new('git', $Arguments)
+        $psi.WorkingDirectory = $Dir; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+        $p = [Diagnostics.Process]::Start($psi)
+        $err = $p.StandardError.ReadToEndAsync(); $out = $p.StandardOutput.ReadToEnd(); $p.WaitForExit(); $null = $err.Result
+        if ($p.ExitCode -eq 0) { $out.TrimEnd("`r", "`n") } else { $null }
+    } catch { $null }
+}
+
 function Invoke-New([string]$Root) {
     if ([IO.Directory]::Exists($Root) -and @(Get-ChildItem -LiteralPath $Root -Force).Count -gt 0) {
         if ([IO.File]::Exists((Join-Path $Root 'CONTEXT.md')) -and [IO.Directory]::Exists((Join-Path $Root 'EXCHANGE'))) {
@@ -250,31 +275,29 @@ function Invoke-New([string]$Root) {
         Stop-Looper "$Root already exists and is not empty; Looper never overwrites a folder."
     }
     $projectDir = if ($Project) { Resolve-Loop $Project } else { (Get-Location).ProviderPath }
+    if (-not [IO.Directory]::Exists($projectDir)) { Stop-Looper "no project folder $projectDir; nothing was created." }
     $taskName = if ($Task) { $Task } else { Split-Path -Leaf $projectDir }
     [IO.Directory]::CreateDirectory($Root) | Out-Null
     Copy-Item -Path (Join-Path $LooperHome 'template/*') -Destination $Root -Recurse -Force
     Get-ChildItem -LiteralPath $Root -Recurse -Force -Filter '.gitkeep' | Remove-Item -Force
-    $helper = Join-Path $LooperHome 'tools/looper.ps1'
     $context = Join-Path $Root 'CONTEXT.md'
     $text = [IO.File]::ReadAllText($context)
-    $fill = @{ TASK = $taskName; LOOP = $Root; PROJECT = $projectDir; LOOPER_HOME = $LooperHome; HELPER = $helper; CREATED = (Get-Date).ToString('yyyy-MM-dd HH:mm') }
+    $fill = [ordered]@{ TASK = $taskName; LOOP = $Root; PROJECT = $projectDir; LOOPER_HOME = $LooperHome; CREATED = (Get-Date).ToString('yyyy-MM-dd HH:mm') }
     foreach ($key in $fill.Keys) { $text = $text.Replace('{{' + $key + '}}', $fill[$key]) }
     [IO.File]::WriteAllText($context, $text, [Text.UTF8Encoding]::new($false))
 
     # Keep the task folder out of the project's commits without touching tracked files.
-    $git = $null
+    # Ask git for the folder's path inside its repo, as looper.sh does: comparing path spellings
+    # fails where the temp or home path is a symlink (macOS /var -> /private/var) or C:/ vs /c/.
     # --git-path: the exclude file git reads (in a linked worktree, the main repository's).
-    try { $ErrorActionPreference = 'Continue'; $git = & git -C $projectDir rev-parse --show-toplevel 2>$null; $excludePath = & git -C $projectDir rev-parse --git-path info/exclude 2>$null }
-    catch { $git = $null } finally { $ErrorActionPreference = 'Stop' }
-    if ($git -and $excludePath) {
-        $top = [IO.Path]::GetFullPath($git).TrimEnd('\', '/')
-        if ($Root.StartsWith($top + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            $relative = $Root.Substring($top.Length + 1).Replace('\', '/')
-            $exclude = [IO.Path]::GetFullPath([IO.Path]::Combine($projectDir, $excludePath))   # may be relative to the project
-            [IO.Directory]::CreateDirectory((Split-Path -Parent $exclude)) | Out-Null
-            $lines = if ([IO.File]::Exists($exclude)) { [IO.File]::ReadAllLines($exclude) } else { @() }
-            if ("/$relative/" -notin $lines) { [IO.File]::AppendAllText($exclude, "`n/$relative/`n") }
-        }
+    $prefix = Get-GitLine $Root 'rev-parse --show-prefix'
+    $excludePath = Get-GitLine $Root 'rev-parse --git-path info/exclude'
+    if ($prefix -and $excludePath) {
+        $exclude = [IO.Path]::GetFullPath([IO.Path]::Combine($Root, $excludePath))   # may be relative to the folder
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $exclude)) | Out-Null
+        $lines = if ([IO.File]::Exists($exclude)) { [IO.File]::ReadAllLines($exclude) } else { @() }
+        $entry = '/' + ($prefix -replace '([\\\[\]*?])', '\$1' -replace ' $', '\ ')
+        if ($entry -cnotin $lines) { [IO.File]::AppendAllText($exclude, "`n$entry`n") }
     }
 
     Write-Output "LOOPER created $Root"
@@ -300,13 +323,32 @@ function Show-Status([string]$Root) {
 function Invoke-Publish([string]$Root) {
     if (-not $Kind) { Stop-Looper 'publish needs a kind: handoff or review' }
     $P = Get-Paths $Root
+    # The publish lock makes these leftovers safe to remove after an interrupted publish.
+    Get-ChildItem -LiteralPath $P.History -File -Force -Filter '.*.tmp' |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
     $name = $Kind.ToUpperInvariant()
     $target = Join-Path $P.Exchange "$name.md"
     $defaultDraft = Join-Path $P.Exchange "$name.next.md"
     $draftPath = if ($Draft) { Resolve-Loop $Draft } else { $defaultDraft }
+    # Only the default draft is removed after publishing. Ordinal, so a name differing only in case
+    # (a distinct file on Linux or in a case-sensitive Windows folder) is never taken for it.
+    $isDefaultDraft = [string]::Equals($draftPath, $defaultDraft, [StringComparison]::Ordinal)
+    if (-not $isDefaultDraft -and [IO.Path]::DirectorySeparatorChar -eq '/' -and -not $draftPath.Contains('\') -and
+        [string]::Equals([IO.Path]::GetFileName($draftPath), "$name.next.md", [StringComparison]::Ordinal)) {
+        # The same folder by another spelling (macOS /var is /private/var): compare physical folders, as looper.sh does.
+        # Ordinal: -ceq is linguistic, so distinct Unicode-equal Linux folders would compare equal.
+        $physical = foreach ($d in @([IO.Path]::GetDirectoryName($draftPath), $P.Exchange)) {
+            Push-Location -LiteralPath $d -ErrorAction SilentlyContinue
+            if ($?) { "$(& /bin/sh -c 'pwd -P')"; Pop-Location } else { '' }
+        }
+        $isDefaultDraft = $physical[1] -and [string]::Equals($physical[0], $physical[1], [StringComparison]::Ordinal)
+    }
     if (-not [IO.File]::Exists($draftPath)) { Stop-Looper "no draft at $draftPath. Write the $Kind there first." }
     $bytes = [IO.File]::ReadAllBytes($draftPath)
     if ($bytes.Length -eq 0) { Stop-Looper "draft $draftPath is empty." }
+    if ($bytes.Length -ge 2 -and (($bytes[0] -eq 255 -and $bytes[1] -eq 254) -or ($bytes[0] -eq 254 -and $bytes[1] -eq 255))) {
+        Stop-Looper "draft $draftPath is UTF-16; save it as UTF-8. Nothing was published."
+    }
     $note = New-Note $bytes
     if ($note.Text.Contains($Marker)) { Stop-Looper "draft still contains the template marker $Marker - write the real $Kind." }
     $known = Get-HistoryHandoffs $P
@@ -323,10 +365,10 @@ function Invoke-Publish([string]$Root) {
             $single = try { [IO.File]::Exists((Resolve-Loop $item)) } catch { $false }
             $paths = if ($single) { , $item } else { $item -split ',' }
             foreach ($path in $paths) {
-                $full = Resolve-Loop $path.Trim()
+                $full = Resolve-Loop $path   # literal: a space is part of a name
                 if (-not [IO.File]::Exists($full)) { Stop-Looper "attachment not found (files only): $full" }
-                $name = Split-Path -Leaf $full
-                if ($snapshots | Where-Object Name -eq $name) { Stop-Looper "two attachments are named $name; rename one." }
+                $name = [IO.Path]::GetFileName($full)   # .NET, so a backslash on Unix stays in the name
+                if ($snapshots | Where-Object { [string]::Equals($_.Name, $name, $pathComparison) }) { Stop-Looper "two attachments are named $name; rename one." }
                 $data = [IO.File]::ReadAllBytes($full)
                 $snapshots += [pscustomobject]@{ Name = $name; Bytes = $data }
                 '- `{0}`: {1} bytes, sha256 {2}' -f $name, $data.Length, (Get-Sha $data)
@@ -350,7 +392,7 @@ function Invoke-Publish([string]$Root) {
         }
         $current = Get-Note $P.Handoff
         if ($current -and $current.Sha -ceq $note.Sha) {
-            if ($draftPath -eq $defaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
+            if ($isDefaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
             Write-Output "LOOPER unchanged: handoff $($note.Short) is already published; nothing to do."
             return
         }
@@ -360,32 +402,44 @@ function Invoke-Publish([string]$Root) {
             # Identity is the text's hash, so identical text would inherit that handoff's old answer.
             Stop-Looper ('this exact handoff text was already published as {0:000}. A re-sent request must differ (e.g. say why it is sent again) so an old answer cannot settle it.' -f $earlier[0].Number)
         }
-        $number = if ($last -and $last[0].Sha -ceq $note.Sha) { $last[0].Number } else { 1 + [int]($known | ForEach-Object Number | Measure-Object -Maximum).Maximum }
+        $restoring = $last -and $last[0].Sha -ceq $note.Sha
+        $number = if ($restoring) { $last[0].Number } else { 1 + [int]($known | ForEach-Object Number | Measure-Object -Maximum).Maximum }
+        $historyHandoff = Join-Path $P.History ('{0:000}_HANDOFF.md' -f $number)
+        if ([IO.Directory]::Exists($historyHandoff) -or ([IO.File]::Exists($historyHandoff) -and
+                (Get-Sha ([IO.File]::ReadAllBytes($historyHandoff))) -cne $note.Sha)) {
+            # HISTORY is append-only: an existing file is only ever rewritten with its own bytes (a restore). The file
+            # system may equate a name the scan reads differently (001_HANDOFF.MD on Windows or macOS) with this one:
+            # never overwrite it, nor take its snapshot for an orphan.
+            Stop-Looper "$historyHandoff already exists with other content; rename or remove it. Nothing was published."
+        }
         if ($snapshots) {
             $dir = Join-Path $P.History ('{0:000}_attachments' -f $number)
+            if ([IO.Directory]::Exists($dir) -and -not @($known | Where-Object Number -eq $number).Count) {
+                # No recorded handoff (by number, as HISTORY is read) owns this snapshot: an interrupted publish left it behind.
+                Remove-Item -LiteralPath $dir -Recurse -Force
+            }
             if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) {
                 # Restoring the latest handoff (its EXCHANGE copy was lost): reuse its snapshot, but
                 # only if it holds exactly these files, byte for byte. Never touch it otherwise.
-                $restoring = $last -and $last[0].Sha -ceq $note.Sha
                 $same = $restoring -and [IO.Directory]::Exists($dir) -and
                     (@(Get-ChildItem -LiteralPath $dir -Force).Count -eq $snapshots.Count) -and
                     -not @($snapshots | Where-Object {
-                            $f = Join-Path $dir $_.Name
+                            $f = [IO.Path]::Combine($dir, $_.Name)
                             -not [IO.File]::Exists($f) -or (Get-Sha ([IO.File]::ReadAllBytes($f))) -cne (Get-Sha $_.Bytes) })
                 if (-not $same) { Stop-Looper "$dir already exists and does not match these attachments; nothing was published." }
             } else {
                 $script:AttachDir = $dir   # created here, so removed again if anything below fails
                 try {
                     $null = New-Item -ItemType Directory -Path $dir
-                    foreach ($s in $snapshots) { [IO.File]::WriteAllBytes((Join-Path $dir $s.Name), $s.Bytes) }
+                    foreach ($s in $snapshots) { [IO.File]::WriteAllBytes([IO.Path]::Combine($dir, $s.Name), $s.Bytes) }
                 } catch {
                     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
                     Stop-Looper "could not write the attachment snapshot $dir ($($_.Exception.Message)); nothing was published."
                 }
             }
         }
-        Publish-Pair (Join-Path $P.History ('{0:000}_HANDOFF.md' -f $number)) $target $bytes
-        if ($draftPath -eq $defaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
+        Publish-Pair $historyHandoff $target $bytes
+        if ($isDefaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
         Write-Output ('LOOPER published handoff {0:000} {1} - NEXT: reviewer' -f $number, $note.Short)
         return
     }
@@ -410,42 +464,60 @@ function Invoke-Publish([string]$Root) {
         $historyPath = Join-Path $P.History "${base}_$i.md"
     }
     Publish-Pair $historyPath $target $bytes
-    if ($draftPath -eq $defaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
+    if ($isDefaultDraft) { Remove-Item -LiteralPath $draftPath -Force }
     $s = Get-State $Root  # recompute NEXT: a PASS on the final handoff makes the task done
     Write-Output ('LOOPER published review {0} for handoff {1:000} {2} - NEXT: {3}' -f $verdict, $binding.Number, $current.Short, $s.Next)
 }
 
 function Invoke-Clean([string]$Root) {
     # Durable record: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md + REVIEW.md, HISTORY/, FINAL_REPORT,
-    # WATCHERS/README.md and WATCHERS/*.log. Everything else below is disposable runtime state.
+    # WATCHERS/README.md, *.lock and *.log. Everything else below is disposable runtime state.
     $P = Get-Paths $Root
     $watchers = Join-Path $Root 'WATCHERS'
-    foreach ($lock in @(Get-ChildItem -LiteralPath $watchers -Filter '*.lock' -File -ErrorAction SilentlyContinue)) {
-        try { ([IO.File]::Open($lock.FullName, 'Open', 'ReadWrite', 'None')).Dispose() }
-        catch [IO.IOException] { Stop-Looper "a driver is running ($($lock.Name) is held); stop it before cleaning." }
-    }
-    $junk = @(Get-ChildItem -LiteralPath $watchers -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' -and $_.Extension -ne '.log' })
-    $junk += @(Get-ChildItem -LiteralPath $P.Exchange -File -Force | Where-Object { $_.Name -like '*.next.md' -or $_.Name -like '.*.tmp' })
-    $junk += @(Get-ChildItem -LiteralPath $P.History -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '.*.tmp' })
-    $junk += @(Get-ChildItem -LiteralPath $watchers -Directory -Force -ErrorAction SilentlyContinue)   # e.g. scratch/
-    $junk | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    [IO.Directory]::CreateDirectory($watchers) | Out-Null
+    $leases = @()
+    try {
+        # Create both role locks first, so a first-time driver cannot start during deletion; then
+        # list and hold every lock (one entry per file, also on a case-insensitive volume).
+        foreach ($role in 'worker', 'reviewer') {
+            try { ([IO.File]::Open((Join-Path $watchers "$role.lock"), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')).Dispose() }
+            catch [IO.IOException] { Stop-Looper "a driver is running ($role.lock is held); stop it before cleaning." }
+        }
+        $locks = @(Get-ChildItem -LiteralPath $watchers -Filter '*.lock' -File -Force | ForEach-Object FullName)
+        foreach ($lock in $locks) {
+            try { $leases += [IO.File]::Open($lock, 'OpenOrCreate', 'ReadWrite', 'None') }
+            catch [IO.IOException] { Stop-Looper "a driver is running ($([IO.Path]::GetFileName($lock)) is held); stop it before cleaning." }
+        }
+        $junk = @(Get-ChildItem -LiteralPath $watchers -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' -and $_.Extension -notin '.log', '.lock' })
+        $junk += @(Get-ChildItem -LiteralPath $P.Exchange -File -Force | Where-Object { $_.Name -like '*.next.md' -or $_.Name -like '.*.tmp' })
+        $junk += @(Get-ChildItem -LiteralPath $P.History -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '.*.tmp' })
+        $junk += @(Get-ChildItem -LiteralPath $watchers -Directory -Force -ErrorAction SilentlyContinue)   # e.g. scratch/
+        $junk | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    } finally { foreach ($lease in $leases) { $lease.Dispose() } }
     Write-Output "LOOPER cleaned $($junk.Count) runtime file(s): $(($junk | ForEach-Object Name) -join ', ')"
-    Write-Output 'Kept: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md, EXCHANGE/REVIEW.md, HISTORY/, FINAL_REPORT, WATCHERS/README.md and logs.'
+    Write-Output 'Kept: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md, EXCHANGE/REVIEW.md, HISTORY/, FINAL_REPORT, WATCHERS/README.md, driver locks and logs.'
 }
 
 function Invoke-Wait([string]$Root) {
     if (-not $For) { Stop-Looper 'wait needs -For worker or -For reviewer' }
-    $deadline = [DateTime]::UtcNow.AddMinutes($TimeoutMinutes)
-    $watcher = [IO.FileSystemWatcher]::new($Root)
-    $watcher.IncludeSubdirectories = $true
-    $watcher.NotifyFilter = [IO.NotifyFilters]'FileName, LastWrite, Size'
+    $For = $For.ToLowerInvariant()   # report the role as looper.sh does
+    $deadline = [DateTime]::UtcNow.AddMinutes($waitMinutes)
+    $watcher = $null
     # Queue events for the whole wait: WaitForChanged hears only changes during the call, so a
     # publish that landed during a scan went unnoticed until the next poll. Own tag: the helper may
     # run in-process in an agent's session, whose other events are not ours to wait on or drop.
     $tag = 'looper-wait-' + [guid]::NewGuid().ToString('N')
-    foreach ($name in 'Created', 'Changed', 'Deleted', 'Renamed') { $null = Register-ObjectEvent $watcher $name -SourceIdentifier "$tag.$name" }
-    $watcher.EnableRaisingEvents = $true
     try {
+        try {
+            $watcher = [IO.FileSystemWatcher]::new($Root)
+            $watcher.IncludeSubdirectories = $true
+            $watcher.NotifyFilter = [IO.NotifyFilters]'FileName, LastWrite, Size'
+            foreach ($name in 'Created', 'Changed', 'Deleted', 'Renamed') { $null = Register-ObjectEvent $watcher $name -SourceIdentifier "$tag.$name" }
+            $watcher.EnableRaisingEvents = $true
+        } catch {
+            Unregister-Event -SourceIdentifier "$tag.*" -ErrorAction SilentlyContinue
+            if ($watcher) { $watcher.Dispose(); $watcher = $null }
+        }
         while ($true) {
             # Scan before every wait: events are only hints, the files are the truth. Events so far
             # are covered by this scan; a later one stays queued and ends the next wait at once.
@@ -455,22 +527,44 @@ function Invoke-Wait([string]$Root) {
             if ($s.Next -eq $For) { Write-Output "LOOPER DUE $For - $($s.Why)"; exit 0 }
             $left = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
             if ($left -le 0) { Write-Output "LOOPER WAIT TIMEOUT - nothing due for $For after $TimeoutMinutes min; wait again"; exit 3 }
-            $null = Wait-Event -SourceIdentifier "$tag.*" -Timeout ([int][Math]::Ceiling([Math]::Min($left, $PollSeconds * 1000) / 1000))
+            $delay = [int][Math]::Ceiling([Math]::Min($left, $pollSec * 1000) / 1000)
+            if ($watcher) { $null = Wait-Event -SourceIdentifier "$tag.*" -Timeout $delay }
+            else { Start-Sleep -Seconds $delay }
         }
     } finally {
-        Unregister-Event -SourceIdentifier "$tag.*"
+        Unregister-Event -SourceIdentifier "$tag.*" -ErrorAction SilentlyContinue
         Get-Event -SourceIdentifier "$tag.*" -ErrorAction SilentlyContinue | Remove-Event
-        $watcher.Dispose()
+        if ($watcher) { $watcher.Dispose() }
     }
 }
 
 if ($Command -eq 'help') { Get-Help $PSCommandPath -Detailed | Out-String | Write-Output; exit 0 }
 $root = Resolve-Loop $Loop
+if ([IO.Path]::DirectorySeparatorChar -eq '/' -and $root.Contains('\')) {
+    # PowerShell path cmdlets read a backslash as a separator here, so they would address another folder.
+    Stop-Looper "task path $root has a backslash, which looper.ps1 cannot use on this OS; use looper.sh or rename the folder."
+}
 if ($Command -eq 'new') { Invoke-New $root; exit 0 }
 Assert-Loop $root
-switch ($Command) {
+$publishLock = $null
+try {
+    if ($Command -in 'publish', 'clean') {
+        # Persistent file; Unix uses flock(2), Windows share-none excludes Perl's open too.
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($null -eq $publishLock) {
+            try { $publishLock = [IO.File]::Open((Join-Path $root 'EXCHANGE/.publish.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+            catch [IO.IOException] {
+                if ($deadline.Elapsed.TotalSeconds -ge 90) { Stop-Looper 'timed out waiting 90 s for the publish lock; nothing was published.' }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    }
+    switch ($Command) {
     'status' { Show-Status $root }
     'publish' { Invoke-Publish $root }
     'wait' { Invoke-Wait $root }
     'clean' { Invoke-Clean $root }
+    }
+} finally {
+    if ($null -ne $publishLock) { $publishLock.Dispose() }
 }

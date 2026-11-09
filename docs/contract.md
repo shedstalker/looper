@@ -45,6 +45,8 @@ A file whose text contains `<!-- looper:template -->` counts as not yet written.
 - Reviews carry `Verdict: PASS | REPAIR | BLOCKED` (tolerant of layout and case). Answers to
   research, comparison or access requests may be plain text. Only the final `done` state needs a
   PASS; nothing else in the mechanics reads the verdict, and none of it reads the request type.
+  The first inline-form verdict wins (whitespace, `*`, `_` or backticks may separate the label
+  and word across lines); only if none matches is the first heading-form verdict used.
 - The handoff id identifies the *request*, not the source. Source identity (commit + tree, or
   exact file hashes) must be written in the handoff; a moving working tree is never a candidate.
 - What the handoff offers (commit + tree, file hashes, "no source change, new evidence X") is
@@ -64,10 +66,11 @@ Computed from the files every time; nothing else is stored:
 | it names it (otherwise) | worker |
 
 "Covered" is decided by content. When `FINAL_REPORT.md` is written (no marker line), `publish`
-appends its hash to the handoff as one exact line:
+appends its hash to the handoff unless a valid binding line is already present:
 `` Final report: `FINAL_REPORT.md`, sha256 <64 lowercase hex> `` (by hand, write that line yourself).
-The handoff covers the report when the current report still has that hash. For a handoff without
-the line (older task folders), the rule falls back to write times: the report must not be newer
+An existing binding is preserved: remove or update a copied draft's old binding before publishing
+if the report changed. The handoff covers the report when the current report still has that hash.
+For a handoff without the line (older task folders), the rule falls back to write times: the report must not be newer
 than the handoff. Git clones and plain copies do not keep those times, which is why the hash exists.
 
 Consequences, by construction:
@@ -82,6 +85,14 @@ Consequences, by construction:
 - **Restart needs no recovery step**: any session, watcher or driver re-reads the same answer.
 
 ## Publishing
+
+The helpers serialise `publish` and `clean` for the whole command with an OS-held lock on
+`EXCHANGE/.publish.lock` (created if missing, never deleted, including by `clean`). They wait up
+to 90 seconds, then fail without publishing. The OS releases the lock when its holder dies;
+there is no stale detection. On Linux/macOS, `flock(1)`, Perl `flock` and .NET `FileShare.None`
+all use `flock(2)`. On Windows, PowerShell's share-none open and the Perl holder's open exclude
+each other. The sh helper needs `flock(1)` or Perl. Status, HISTORY ordering and drivers ignore
+the lock file.
 
 1. Write the complete text to `EXCHANGE/HANDOFF.next.md` or `EXCHANGE/REVIEW.next.md`.
 2. Publish (`looper.ps1 publish <folder> handoff|review`), which by hand means:
@@ -116,15 +127,17 @@ sync clients can delay, duplicate or reorder renames and file events.
 
 - **Durable record** (keep): `CONTEXT.md`, `PLAN.md`, `TASK.md`, `EXCHANGE/HANDOFF.md`,
   `EXCHANGE/REVIEW.md`, `HISTORY/`, `FINAL_REPORT.md`, `WATCHERS/README.md`, and driver logs
-  `WATCHERS/*.log` (one line per attempt - the run's runtime record).
+  `WATCHERS/*.log` (attempt starts and results - the run's runtime record).
 - **Disposable runtime state** (safe to delete whenever no driver is running): everything else in
-  `WATCHERS/` (locks, `*.session` ids, last-run output, prompt files, and `WATCHERS/scratch/` for
+  `WATCHERS/` (`*.session` ids, last-run output, prompt files, and `WATCHERS/scratch/` for
   an agent's throwaway work), `EXCHANGE/*.next.md` drafts,
   and `.*.tmp` files left by an interrupted publish. Deleting it never changes whose move it is.
-  `looper clean <folder>` does exactly this and refuses while a driver holds its lock (`looper.sh`
-  checks with `flock(1)`, or the Windows lock itself under Git Bash; elsewhere without `flock` it
-  refuses to clean); drivers
-  also remove their own session and last-output files, and `WATCHERS/scratch/`, when the task is done.
+  `looper clean <folder>` does exactly this, except persistent `WATCHERS/*.lock` files stay in
+  place to preserve their inodes. Both helpers hold both role locks and any existing driver locks
+  through deletion, refusing if a driver holds one (`looper.sh` uses `flock(1)`, Perl under Git Bash,
+  or `pwsh` on Unix; with none of them it refuses to clean). Drivers
+  also remove their own session and last-output files, and `WATCHERS/scratch/`, when they observe
+  the task is done, including after a single attempt with `-Once`.
 - **One folder per task.** A new session - after a restart, a deleted chat or a new day - continues
   the existing folder; `new` refuses to create a second one there. For the next task in the same
   project, pick another folder name or finish with this one first.
@@ -137,7 +150,9 @@ sync clients can delay, duplicate or reorder renames and file events.
 Wake-up plumbing only moves attention. It may use file events, polling, hashes, stable reads,
 locks and timers; it must not judge work, edit source or create authority. It must: notice due
 work already present at start, ignore partial writes, stay quiet on unchanged content, and
-leave work due after a failed attempt. `looper.ps1 wait` and `drivers/` implement this.
+leave work due after a failed attempt. Both helpers default to a 30-second poll interval;
+`looper.ps1 wait` also uses file events, while `looper.sh wait` only polls. The drivers use the
+PowerShell helper.
 A heartbeat or wake-up prompt carries no task details - only "you are the <role> for the task
 at <folder>; read its CONTEXT.md".
 
@@ -151,3 +166,9 @@ at <folder>; read its CONTEXT.md".
 6. Capability is not permission: Looper grants no merge, deploy, install or external-write authority.
 7. Park local blockers and continue; stop the loop only when nothing useful can safely continue.
 8. Keep Level 1 boring: complexity must be earned by repeated real friction.
+9. The two helpers agree on documented input: ASCII command, option and role words, and UTF-8
+   text with at most one leading BOM and no NUL bytes. Other input (non-ASCII lookalike letters,
+   control characters in arguments, embedded NUL, repeated BOMs) is outside this contract, and
+   either helper may refuse it or read it differently. File and folder names are compared the way
+   the OS compares them; names beyond printable ASCII are best effort, but a loose comparison
+   never makes a helper delete or overwrite a file other than the one it means.

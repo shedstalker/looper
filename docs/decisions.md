@@ -135,7 +135,7 @@ is reached through OpenCode's own provider support (`-Model provider/model`); if
 support it cleanly, the limit is documented and nothing is built around it. No driver for other
 CLIs, no direct provider API integration. Any other agent can still take a role by hand. *Why:*
 the smallest useful tool; OpenCode already gives model breadth behind one driver (E14-E16).
-"OpenCode offers this model" is never the same as "this model passed a Looper handoff".
+"OpenCode offers this model" is never the same as "this model passed a Looper handoff". (Superseded for OpenCode by D28: two driven runtimes.)
 
 **D25 - A second opinion is a second task folder, not a protocol.** Level 1 keeps one reviewer
 and one `REVIEW.md` per folder. For two independent answers on one checkpoint, the worker creates
@@ -169,3 +169,9 @@ hash matches the current report. An edit after the final PASS shows `NEXT: worke
 *Why this shape:* it is how Looper already binds answers to handoffs (content, not time). The
 line is part of the handoff's bytes, so a changed report is a new request. Both helpers write
 identical bytes, and handoffs without the line keep D12's rule, so old task folders still work.
+
+**D28 - Two driven runtimes: the OpenCode driver is cut (owner, 2026-11-09).** Looper keeps
+drivers for Claude Code and Codex CLI only; D24's third route is withdrawn. *Why:* the owner's
+decision in the 2026-11 lean review: each driver is code, docs and a test to keep in step across
+three OSes. Other models and agents still take part by hand through the contract; the testing
+record keeps what OpenCode proved (E10, E14-E17).

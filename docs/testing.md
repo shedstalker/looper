@@ -25,7 +25,7 @@ Where to look:
 
 ## Deterministic suite - `tests/acceptance.ps1`
 
-53 checks (27 at v0.1.0 Level 1 Basic; 36 at the first Deluxe checkpoint; 39 at v0.2.0 Level 1 Deluxe; 41 with the OpenCode and Claude Code driver checks; 48 at v0.3.0: six attachment checks, and one from its final review; 50 at v0.3.1, from an outside review; 53 at v0.4.0, after an outside run on Linux: the report hash, the driver's stdin, and a UTF-8 BOM), run against either helper (`-Helper ps1|sh`): bootstrap, git exclude (also in a git worktree),
+78 checks (since v0.4.0: the OpenCode driver check removed with its driver; Skill package provenance and exact folder/zip manifests, UTF-16 draft refusal, cleanup lock retention, tilde build output paths, and native Git Bash task paths; argument validation/case parity, literal attachment and draft names, missing-project refusal, verdict precedence and empty driver arguments; hidden-entry cleanup coverage; a Unix-only no-flock cleanup check, a non-ASCII task folder exclude, publish serialisation (#1), the Codex driver, and -Once exit codes, idle exit, child reap and output capture, plus interrupted attachment retry, literal git excludes and backslash-path hashes (#2, #3, #4); 27 at v0.1.0 Level 1 Basic; 36 at the first Deluxe checkpoint; 39 at v0.2.0 Level 1 Deluxe; 41 with the OpenCode and Claude Code driver checks; 48 at v0.3.0: six attachment checks, and one from its final review; 50 at v0.3.1, from an outside review; 53 at v0.4.0, after an outside run on Linux: the report hash, the driver's stdin, and a UTF-8 BOM), run against either helper (`-Helper ps1|sh`): bootstrap, git exclude (also in a git worktree),
 no-overwrite, template refusal, handoff publish + HISTORY, unchanged handoff quiet, answer
 validation (handoff id required, "previous" mention does not bind), soft-format verdicts, a
 plain research answer without a verdict, REPAIR -> repair -> re-review, stale review refused (exit 4) with
@@ -38,8 +38,26 @@ write leaves nothing, restoring reuses only an identical snapshot), an absolute 
 a Skill build that replaces only a package it generated (the repository, a package holding it,
 and either through a junction or symlink, are refused), no references to the
 originating project in shipped code, and (PowerShell 7)
-the OpenCode and Claude Code drivers pass their settings to the child and leave the caller's
+the Claude Code driver passes its settings to the child and leaves the caller's
 environment untouched.
+
+The development repository's CI (the public repository has no workflows) runs both helpers on
+Windows, macOS and Linux for pull requests and pushes to its `main`, plus Windows PowerShell 5.1 on Windows. It also builds the Skill twice into the same temp
+folder, checks it, and builds and checks the default `dist/` package and zip. The Unix-only
+cleanup check hides `flock` from PATH and tests the `pwsh` fallback with a held and released lock.
+The cleanup race check attempts all role locks during deletion and checks their release afterward;
+the native-path check runs only with the sh helper on Windows Git Bash/MSYS/Cygwin.
+
+The Skill manifest check expects the same 24 files (23 sources plus `VERSION`) on every OS,
+including `template/HISTORY/.gitkeep`. It checks ordered provenance keys and the full 40-hex
+commit when building from a Git checkout, then rejects a missing, extra or changed hidden file
+and missing or malformed `VERSION` separately in the folder and zip. Expected paths and SHA-256
+hashes are computed from sources; generated `VERSION` metadata is parsed rather than hashed.
+The builder retains Windows PowerShell 5.1 support; the new packaging checks have been run on
+Linux PowerShell 7, with Windows/5.1 and macOS still unverified for this change.
+
+The Codex fake-CLI check covers default fresh sandbox selection, caller config on fresh and
+resumed runs, and resumed worker writable roots (TOML quoting and caller override order).
 
 | Platform (53 checks, measured 2026-09-30 on the v0.4.0 candidate) | `looper.ps1` | `looper.sh` |
 |---|---|---|
@@ -76,8 +94,8 @@ check run as well.
 ## Live runs
 
 Models: Claude Code 2.1.278 (`claude-opus-5`), codex-cli 0.158.0-alpha.2 (`gpt-6-sol`).
-Launch commands are exactly what the drivers log in `WATCHERS/<role>.log` and are documented
-in `drivers/*/README.md`.
+Launch command forms are documented in [the driver guide](../drivers/README.md). `WATCHERS/<role>.log` records
+the executable and requested settings, not the full command line.
 
 | # | Scenario | Worker | Reviewer | Result |
 |---|---|---|---|---|
@@ -169,8 +187,8 @@ Findings from this pass:
   `OPENCODE_PERMISSION` set in the caller's session, so a later `-Permission own` run inherited
   the guardrails. It also found that a task folder outside the project was accepted with rules
   that could not match. Both fixed, with a model-free acceptance check that uses a fake
-  `opencode`. On Windows, a task created by the sh helper under Git Bash records POSIX paths
-  that PowerShell drivers cannot use; the OpenCode driver now says so.
+  `opencode`. At that time, Git Bash tasks recorded POSIX paths that PowerShell drivers could
+  not use, and OpenCode reported it. The sh helper now records native Windows paths instead.
 - The Claude Code driver's `-Local` had the same leak (ANTHROPIC_* left pointing at Ollama in
   the caller's session); fixed, with a model-free check.
 - The Codex driver passed `-Extra` to `codex exec resume`, which rejects `--add-dir` (the form
@@ -225,7 +243,7 @@ report status as a claim, when to use a fresh session, launching a watchable dri
 - Multi-hour runs: the longest loops are well under an hour (including the real-use loops in E13). Nothing in the design depends on
   duration, but a long real task is still the missing proof.
 - macOS/BSD tools and busybox have not been run (Linux dash and Git Bash sh have).
-- OpenCode: tested with Grok (`xai/grok-4.7` only; small tasks) and once with local Qwen. Other providers it offers (Gemini, ...) are untested with Looper; macOS is untested. The OpenCode driver was run natively on Windows only; the container runs used the command line directly.
+- OpenCode: its driver was removed in v0.4.1 (D28). Earlier runs (E10, E14-E17) tested Grok (`xai/grok-4.7`, small tasks) and once local Qwen.
 - Local models: 4 of 4 Looper review runs through Claude Code or OpenCode were correct once the
   context window was large enough, but an unconstrained probe gave a wrong answer; not yet
   trusted as the only reviewer of consequential work. Codex + the tested Qwen models did not work.

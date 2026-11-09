@@ -10,7 +10,7 @@ project in September 2026. One agent (Claude Code) did the work, a second (Codex
 independently reviewed checkpoints, and at first the project owner carried every message
 between them by hand. That project was the proving ground; it does not own Looper, and nothing
 specific to it belongs here. Looper was then rebuilt as a standalone project and tested
-independently (see `testing.md`).
+independently (see [testing](testing.md)).
 
 The workflow evolved in three steps:
 
@@ -59,35 +59,24 @@ jokingly "Bruce", after Bruce Willis; "Looper" won because the software meaning 
 
 ## Lessons carried into Looper
 
-- **The shared TASK file is the durable working memory.** Sessions compacted, restarted and
-  were replaced; the work continued because TASK recorded it. -> `TASK.md` is free-form and shared.
-- **Agent sessions are disposable.** -> every role can cold-start from `CONTEXT.md`; resuming a
-  session is an optimisation, never a requirement.
-- **Exact candidate identity matters, but templates must stay light.** Commit + tree was essential
-  for source work; mandatory hash fields everywhere were friction. -> only the `Handoff:` line is
-  required in an answer (plus `Verdict:` for reviews); the rest is proportionate prose.
-- **Filenames and labels are bad filters.** A differently named "final" file fell outside the
-  watcher's pattern; later, reviewers had to be told never to filter on words like "final".
-  -> one handoff file; due-ness depends on content identity, never on labels.
-- **Same-source new evidence still needs review; byte-identical repeats do not.** -> a handoff's
-  id is the hash of its bytes.
-- **A failed reviewer run must not consume a handoff.** Reviewer runs failed mid-review (lost
-  command runner, sandbox errors). -> a handoff is settled only by a published answer naming it;
-  a failed attempt publishes nothing, so the work stays due.
-- **Detection is not activation.** The first file watcher only logged; the heartbeat did the
-  waking. -> drivers both detect and launch; a heartbeat remains an honest option.
-- **Heartbeat prompts must be tiny.** A scheduled review prompt grew into a long paragraph of
-  task-specific instructions that went stale as the task moved on. -> the wake-up prompt is one
-  line; state and instructions live in the task folder.
-- **Events are hints; rescans are truth.** File events can duplicate or be missed. -> scan before
-  every wait, poll as a fallback.
-- **In-memory watcher state is not restart state.** -> watchers keep no state at all.
-- **Git/source remains code truth.** -> Looper never records source state of its own.
-- **Watchers move attention, never decide.** -> drivers only wait, launch and re-read.
-- **Constrain outcome and proof, not reasoning** (research done in the originating project on
-  "bounded agency"). -> PLAN = outcome, context, boundaries, proof, escalation; the reviewer
-  judges results, not obedience to a method.
-- **Stay model-agnostic.** Claude + Codex was the first proven pair, not the architecture.
+The formal decisions are in [decisions](decisions.md); these are the failures behind them:
+
+- Sessions compacted, restarted or disappeared; a shared TASK file kept the work moving.
+  Files hold durable state, and sessions can always cold-start from CONTEXT.
+- Commit + tree identified source precisely, but mandatory hash fields everywhere added friction.
+  Answers need only handoff identity, with a verdict for reviews (D2-D3).
+- A differently named "final" file escaped a watcher's pattern. Fixed filenames and content
+  identity replaced labels; new evidence still gets review even when source is unchanged.
+- Lost runners and sandbox errors killed reviewers mid-attempt. Only a published answer settles
+  work; failed attempts leave it due (D1). In-memory watcher state never owns restart state.
+- The first watcher detected files but did not wake an agent; the heartbeat supplied activation.
+  Drivers now detect and launch, while events remain hints and rescans remain truth.
+- Long scheduled prompts went stale. A wake-up names only the role and task folder; procedure
+  and current state stay in files.
+- Source control owns source truth; watchers move attention and never judge work or grant authority.
+- "Bounded agency" research in the originating project led to PLAN's outcome, context, boundaries,
+  proof and escalation: constrain results and evidence, not the agent's reasoning method.
+- Claude + Codex was the first tested pair, not an architectural dependency.
 
 ## Development of this repository
 

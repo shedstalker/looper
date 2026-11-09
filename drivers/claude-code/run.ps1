@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+#requires -Version 7
 <#
 .SYNOPSIS
   Run a Looper role with Claude Code headless (`claude -p`), one run per due item.
@@ -26,7 +27,8 @@ param(
     [string]$Local,
     [string]$Claude,
     [string]$Extra = '',
-    [int]$AttemptTimeoutMinutes = 60,
+    [double]$AttemptTimeoutMinutes = 60,
+    [double]$IdleExitMinutes = 0,
     [int]$MaxFailures = 3,
     [switch]$Show,
     [switch]$Once
@@ -36,7 +38,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Claude) {
     $Claude = (Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $Claude) {
-        $candidate = Join-Path $HOME '.local/bin/claude.exe'
+        $candidate = Join-Path $HOME $(if ($IsWindows) { '.local/bin/claude.exe' } else { '.local/bin/claude' })
         if (Test-Path $candidate) { $Claude = $candidate } else { throw 'claude CLI not found; pass -Claude <path>.' }
     }
 }
@@ -71,7 +73,7 @@ $requested = "model=$(if ($Model) { $Model } else { '(claude default)' }) effort
     -Requested $requested -Report 'model="([^"]+)":\{"inputTokens"', 'effort=(?!)' `
     -AttachHint 'claude --resume {SESSION}' `
     -WorkingDirectory $(if ($Role -eq 'reviewer') { 'LOOP' } else { 'PROJECT' }) `
-    -AttemptTimeoutMinutes $AttemptTimeoutMinutes -MaxFailures $MaxFailures -Show:$Show -Once:$Once
+    -AttemptTimeoutMinutes $AttemptTimeoutMinutes -IdleExitMinutes $IdleExitMinutes -MaxFailures $MaxFailures -Show:$Show -Once:$Once
 $code = $LASTEXITCODE
 } finally { foreach ($n in $callerEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $callerEnv[$n]) } }
 exit $code

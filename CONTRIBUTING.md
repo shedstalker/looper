@@ -10,11 +10,13 @@ Open an issue and include what makes a Looper problem reproducible:
 
 - the Looper version (`VERSION` in a Skill install, `git describe --tags` in a clone, or the
   release you downloaded);
-- the runtime and model for each role (Claude Code, Codex CLI or OpenCode, plus the model), and
+- the runtime and model for each role (Claude Code or Codex CLI, or the agent used by hand, plus the model), and
   whether it ran visible, headless (a driver) or by hand;
 - your OS and shell, and which helper you used (`looper.ps1` or `looper.sh`);
 - the output of `status` on the task folder;
 - the relevant lines from `WATCHERS/<role>.log`, if a driver was involved.
+
+For a Skill install, include its `VERSION` file ([format](integrations/skill/README.md)).
 
 Please don't paste credentials, API keys, sign-in files (`auth.json`) or private task content. A
 short excerpt of a `HANDOFF.md` or `REVIEW.md` is usually enough.
@@ -32,8 +34,8 @@ What gets accepted is shaped by a few house rules:
   without it. Deleting beats adding.
 - **The core names no provider.** `template/`, `prompts/`, `tools/` and `docs/contract.md` work
   with any agent; provider details live under `drivers/`.
-- **Three runtimes have drivers: Claude Code, Codex CLI and OpenCode.** New models go through
-  OpenCode. Other agents can take part by hand; there are no drivers for more CLIs.
+- **Two runtimes have drivers: Claude Code and Codex CLI** (D28). Other agents and models take
+  part by hand; there are no drivers for more CLIs.
 - **Evidence over claims.** "A runtime offers this model" is not "this model passed a Looper
   handoff". Record what was actually run in `docs/testing.md`, including what failed.
 - **The protocol must keep working by hand.** Scripts are conveniences, never requirements.

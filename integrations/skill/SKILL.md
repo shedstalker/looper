@@ -21,7 +21,7 @@ Helper, same commands in either edition:
 - **Starting work with Looper, or continuing as the worker:** first look for an existing task
   folder (usually `<project>/.looper`) and continue it if present. Otherwise read
   `<skill-dir>/prompts/worker.md` and follow it.
-- **Asked to review or answer a Looper task:** read the task's `.looper/CONTEXT.md`, then
+- **Asked to review or answer a Looper task:** read `<task-folder>/CONTEXT.md`, then
   `<skill-dir>/prompts/reviewer.md`.
 - **Asked about the state of a Looper task:** run `status` on the folder and summarise `TASK.md`
   and the latest exchange.

@@ -7,10 +7,28 @@ reference; the skill lets you say "use Looper for this task" without a path.
 name, short description, default prompt `$looper`) are the only skill-specific files.
 `build.ps1` generates the package by copying the canonical `template/`, `prompts/`, `tools/`,
 `drivers/`, `docs/contract.md` and `LICENSE` next to them - a copy, never a fork. Rebuild after
-changing Looper; the build verifies every packaged file (and the zip) byte-for-byte against the
-repository, and `-Check` verifies an existing package without rebuilding. A rebuild replaces only
+changing Looper. The build and `-Check` (which does not rebuild) compare the package, and for
+`dist/` the zip, with the paths and SHA-256 hashes of the sources, hidden files included on every
+OS: a missing, extra or changed file fails. A rebuild replaces only
 a package the build generated (or an empty folder), never one that holds this repository or
-contains a link; it refuses any other existing `-Out`.
+contains a link; it refuses any other existing `-Out`. Likewise the default `dist/looper-skill.zip` is replaced only
+if it is a generated package (every entry under `looper/`, with `looper/VERSION`).
+
+`VERSION` identifies the source (PowerShell 7 or Windows PowerShell 5.1 can build):
+
+```text
+generator: Looper skill build
+repository: https://github.com/shedstalker/looper.git
+commit: 0123456789abcdef0123456789abcdef01234567
+dirty: false
+describe: v0.4.0
+date: 2026-11-08
+git: available
+```
+
+`repository` is the origin URL without credentials; `dirty` means tracked files differed from
+`commit` (untracked files are ignored); unknown values say `unknown`, and a build without git
+records `git: unavailable`. A dirty install matches no commit: compare it with `-Check` instead.
 
 ```powershell
 pwsh -File integrations/skill/build.ps1 -Out ~/.claude/skills/looper   # Claude Code (personal)

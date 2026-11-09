@@ -61,6 +61,8 @@ Git and the actual source over anything you remember.
 ## 4. When the answer arrives
 
 - **PASS** - the checkpoint or request is done. Record it in TASK and continue.
+- **Plain answer (no verdict)** - use the findings, record them in TASK, and continue; this
+  settles the request, but cannot finish the task without a final PASS.
 - **REPAIR** - fix what was found (you choose how), then publish a new handoff.
 - **BLOCKED** - supply what was missing in a new handoff, or park that item in TASK and continue
   with independent work. Stop the whole loop only when nothing useful can safely continue, or

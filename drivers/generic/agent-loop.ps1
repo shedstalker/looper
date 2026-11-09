@@ -18,8 +18,9 @@
   Placeholders in -Arguments / -ResumeArguments: {LOOP} task folder, {PROJECT} project dir from
   CONTEXT.md, {HOME} Looper home, {SESSION} (resume only). Provider wrappers build them.
 
-  Exit codes: 0 task done; 4 another driver already holds this role's lock; 5 gave up after
-  -MaxFailures attempts that published nothing (work is still due; fix the cause and rerun).
+  Exit codes: 0 task done, idle exit, or -Once published; 4 another driver holds this role's lock;
+  5 watcher gave up after -MaxFailures unpublished attempts; 6 -Once attempt published nothing;
+  7 -Once found nothing due for this role (unless done, which exits 0).
 #>
 [CmdletBinding()]
 param(
@@ -43,17 +44,19 @@ param(
     # (e.g. file-permission repair for a sandbox). Must not change any file's content.
     [scriptblock]$BeforeAttempt,
     [ValidateSet('LOOP', 'PROJECT')][string]$WorkingDirectory = 'LOOP',
-    [ValidateRange(1, 1440)][int]$AttemptTimeoutMinutes = 60,
+    [ValidateRange(0.01, 1440)][double]$AttemptTimeoutMinutes = 60,
     [ValidateRange(1, 100)][int]$MaxFailures = 3,
     [ValidateRange(0, 86400)][int]$RetrySeconds = 60,
     [ValidateRange(1, 10080)][int]$WaitMinutes = 60,
+    [ValidateRange(0, 10080)][double]$IdleExitMinutes = 0,
     [switch]$Show,
     [switch]$Once
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$LooperHome = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$Role = $Role.ToLowerInvariant()   # one lock and file name per role, also on case-sensitive filesystems
+$LooperHome =Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $helper = Join-Path $LooperHome 'tools/looper.ps1'
 $Loop = [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location).ProviderPath, $Loop))
 $watchers = Join-Path $Loop 'WATCHERS'
@@ -69,14 +72,17 @@ function Write-Log([string]$Message) {
 }
 
 function Get-Next {
+    $global:LASTEXITCODE = 0
     $text = (& $helper status $Loop) -join "`n"
     $m = [regex]::Match($text, '(?m)^NEXT: (\w+)')
+    # A broken task folder is an error (exit 1), never "nothing due".
+    if ($LASTEXITCODE -ne 0 -or -not $m.Success) { throw "looper status failed for ${Loop}: $text" }
     $h = [regex]::Match($text, '(?m)^handoff: (.*)$').Groups[1].Value
     [pscustomobject]@{ Next = $m.Groups[1].Value; Handoff = $h; Text = $text }
 }
 
 function Format-Argument([string]$Value) {
-    if ($Value -notmatch '[\s"]') { return $Value }
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
     '"' + ($Value -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
@@ -85,6 +91,29 @@ function Expand([string[]]$List, [string]$Id) {
 }
 
 function Read-Output { [string]((Get-Content -Raw -LiteralPath $outFile -ErrorAction SilentlyContinue) + (Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue)) }
+
+function Complete-Task {
+    # The log stays as the record, including when a single attempt finishes the task.
+    Remove-Item -LiteralPath $sessionFile, $outFile, $errFile -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $watchers 'scratch') -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log 'task done; driver exiting'
+}
+
+function Stop-ActiveChild {
+    if (-not $script:activeChild) { return }
+    $child = $script:activeChild
+    try {
+        if (-not $child.HasExited) {
+            if ($PSVersionTable.PSVersion.Major -ge 7) { $child.Kill($true) } else { & taskkill.exe /T /F /PID $child.Id | Out-Null }
+        }
+    } catch { Write-Log "child kill failed: $_" }
+    if (-not $child.WaitForExit(30000)) {
+        Write-Log "child $($child.Id) did not exit within 30 s"
+        throw 'child did not exit; stopping driver'
+    }
+    $child.Dispose()
+    $script:activeChild = $null
+}
 
 function Show-New([hashtable]$Seen) {
     # -Show: echo what the child has written since last time, so a person can watch it work.
@@ -103,28 +132,34 @@ function Show-New([hashtable]$Seen) {
 
 function Invoke-Child([string[]]$ArgList) {
     # One run of the agent CLI; returns its exit code (or 'killed'). Output goes to WATCHERS files.
-    $file = $Exe; $argv = $ArgList; $stdin = @{ RedirectStandardInput = $promptFile }
+    $file = $Exe; $argv = $ArgList
+    $redirect = @{ RedirectStandardInput = $promptFile; RedirectStandardOutput = $outFile; RedirectStandardError = $errFile }
     if ($env:OS -ne 'Windows_NT') {
-        # Elsewhere Start-Process copies the prompt through a pipe, and an agent that exits without
-        # reading it (e.g. on a sign-in error) makes it throw "Broken pipe". Let sh open the file.
-        $file = '/bin/sh'; $stdin = @{}
-        $argv = @('-c', ('exec "$0" "$@" < ''' + $promptFile.Replace("'", "'\''") + "'"), $Exe) + $ArgList
+        # Elsewhere Start-Process copies redirected streams through pipes: an agent that exits without
+        # reading the prompt makes it throw "Broken pipe", output may still be in flight when the agent
+        # exits, and a grandchild holding a pipe open blocks draining it. Let sh open the files, as
+        # Windows hands the agent the files themselves.
+        $q = $promptFile, $outFile, $errFile | ForEach-Object { "'" + $_.Replace("'", "'\''") + "'" }
+        $file = '/bin/sh'; $redirect = @{}
+        $argv = @('-c', ('exec "$0" "$@" <{0} >{1} 2>{2}' -f $q), $Exe) + $ArgList
     }
-    $proc = Start-Process -FilePath $file -ArgumentList (($argv | ForEach-Object { Format-Argument $_ }) -join ' ') `
-        -WorkingDirectory $cwd -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru @stdin
+    $script:activeChild = $proc = Start-Process -FilePath $file -ArgumentList (($argv | ForEach-Object { Format-Argument $_ }) -join ' ') `
+        -WorkingDirectory $cwd -NoNewWindow -PassThru @redirect
     $null = $proc.Handle   # keeps ExitCode readable on Windows PowerShell 5.1
     $deadline = [DateTime]::UtcNow.AddMinutes($AttemptTimeoutMinutes)
     $seen = @{ $outFile = 0L; $errFile = 0L }
     while (-not $proc.WaitForExit(1000)) {
         if ($Show) { Show-New $seen }
         if ([DateTime]::UtcNow -gt $deadline) {
-            if ($PSVersionTable.PSVersion.Major -ge 7) { $proc.Kill($true) } else { & taskkill.exe /T /F /PID $proc.Id | Out-Null }
+            Stop-ActiveChild
             Write-Log "attempt killed after $AttemptTimeoutMinutes min"
             return 'killed'
         }
     }
     if ($Show) { Show-New $seen }
     try { $proc.ExitCode } catch { 'unknown' }
+    $proc.Dispose()
+    $script:activeChild = $null
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $Loop 'CONTEXT.md'))) { throw "$Loop is not a Looper task folder." }
@@ -139,23 +174,47 @@ catch [IO.IOException] { Write-Output "LOOPER DRIVER already running for $Role i
 
 $prompt = "Looper $Role wake-up. Task folder: $Loop`nRead $(Join-Path $Loop 'CONTEXT.md') and follow the $Role route: do the work that is due and publish it with the Looper helper. If nothing is due for you, stop."
 $promptFile = Join-Path $watchers ".$Role-prompt.txt"
-[IO.File]::WriteAllText($promptFile, $prompt, [Text.UTF8Encoding]::new($false))
 $failures = 0
+$script:activeChild = $null
+$termination = $null
+$idleSince = [DateTime]::UtcNow
 try {
+    # Unix SIGTERM otherwise bypasses PowerShell's finally blocks. Close the runspace so they run.
+    if ($env:OS -ne 'Windows_NT' -and ('System.Runtime.InteropServices.PosixSignalRegistration' -as [type])) {
+        if (-not ('LooperDriverTermination' -as [type])) {
+            Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Management.Automation.Runspaces;
+public static class LooperDriverTermination {
+    public static IDisposable Watch(Runspace runspace) {
+        return PosixSignalRegistration.Create(PosixSignal.SIGTERM, signal => {
+            signal.Cancel = true;
+            runspace.CloseAsync();
+        });
+    }
+}
+'@
+        }
+        $termination = [LooperDriverTermination]::Watch([System.Management.Automation.Runspaces.Runspace]::DefaultRunspace)
+    }
+    [IO.File]::WriteAllText($promptFile, $prompt, [Text.UTF8Encoding]::new($false))
     Write-Log "driver started: $Exe (pid $PID) session=$Session$(if ($Requested) { " requested: $Requested" })"
     while ($true) {
-        & $helper wait $Loop -For $Role -TimeoutMinutes $WaitMinutes | Out-Null
-        if ($LASTEXITCODE -eq 2) {
-            # Completed run: drop this role's disposable runtime files (the log stays as the record).
-            Remove-Item -LiteralPath $sessionFile, $outFile, $errFile -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath (Join-Path $watchers 'scratch') -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Log 'task done; driver exiting'
-            exit 0
-        }
-        if ($LASTEXITCODE -eq 3) { continue }
-        if ($LASTEXITCODE -ne 0) { throw "looper wait failed with exit code $LASTEXITCODE" }
-
         $before = Get-Next
+        if ($before.Next -eq 'done') { Complete-Task; exit 0 }
+        if ($before.Next -ne $Role) {
+            if ($Once) { Write-Log 'nothing due'; exit 7 }
+            $timeout = [double]$WaitMinutes
+            if ($IdleExitMinutes -gt 0) {
+                $left = $IdleExitMinutes - ([DateTime]::UtcNow - $idleSince).TotalMinutes
+                if ($left -le 0) { Write-Log "idle $IdleExitMinutes min; exiting"; exit 0 }
+                $timeout = [Math]::Max(0.01, [Math]::Min($timeout, $left))
+            }
+            & $helper wait $Loop -For $Role -TimeoutMinutes ([Math]::Round($timeout, 2).ToString([Globalization.CultureInfo]::InvariantCulture)) | Out-Null
+            if ($LASTEXITCODE -notin 0, 2, 3) { throw "looper wait failed with exit code $LASTEXITCODE" }
+            continue
+        }
         $saved = if ($Session -eq 'resume' -and [IO.File]::Exists($sessionFile)) { ([IO.File]::ReadAllText($sessionFile)).Trim() } else { '' }
         $mode = if ($saved) { "resume $saved" } else { 'fresh' }
         Write-Log "attempt start ($mode) - handoff $($before.Handoff)"
@@ -179,19 +238,24 @@ try {
         $details = "exit $code$(if ($id) { ", session $id" })$(if ($reported) { ", runtime reported: $reported" })"
 
         $after = Get-Next
+        $idleSince = [DateTime]::UtcNow
         if ($after.Next -ne $Role -or $after.Handoff -ne $before.Handoff) {
             $failures = 0
             Write-Log "attempt published ($details) - NEXT: $($after.Next)"
         } else {
             $failures++
             Write-Log "attempt ended without publishing ($details); work stays due ($failures/$MaxFailures)"
-            if ($failures -ge $MaxFailures) { Write-Log 'giving up; rerun the driver after fixing the cause (or try -Session fresh)'; exit 5 }
+            if (-not $Once -and $failures -ge $MaxFailures) { Write-Log 'giving up; rerun the driver after fixing the cause (or try -Session fresh)'; exit 5 }
         }
+        if ($after.Next -eq 'done') { Complete-Task; exit 0 }
         if ($id -and $AttachHint) { Write-Output "  open this session: $($AttachHint.Replace('{SESSION}', $id))" }
-        if ($Once) { exit 0 }
+        if ($Once) { if ($failures -gt 0) { exit 6 }; exit 0 }
         if ($failures -gt 0) { Start-Sleep -Seconds $RetrySeconds }
     }
 } finally {
-    Remove-Item -LiteralPath $promptFile -ErrorAction SilentlyContinue
-    $lease.Dispose()
+    try { Stop-ActiveChild } finally {
+        if ($termination) { $termination.Dispose() }
+        Remove-Item -LiteralPath $promptFile -ErrorAction SilentlyContinue
+        $lease.Dispose()
+    }
 }

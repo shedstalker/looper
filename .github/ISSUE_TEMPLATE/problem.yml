@@ -20,7 +20,7 @@ body:
     id: runtimes
     attributes:
       label: Runtime and model for each role
-      description: Claude Code, Codex CLI or OpenCode (and the model); visible, headless driver, or by hand; OS, shell and helper (looper.ps1 / looper.sh)
+      description: Claude Code, Codex CLI or another agent by hand (and the model); visible, headless driver, or by hand; OS, shell and helper (looper.ps1 / looper.sh)
   - type: textarea
     id: status
     attributes:

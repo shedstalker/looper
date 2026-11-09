@@ -37,7 +37,7 @@ $root = (Get-Item -LiteralPath $Folder -Force).FullName.TrimEnd('\', '/')
 # Judged by the path inside the task folder, so a task folder that itself sits under some
 # WATCHERS/ or HISTORY/ (e.g. a reviewer's scratch) is still handled.
 $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -File -Force |
-    Where-Object { $_.FullName.Substring($root.Length) -notmatch '^[\\/](HISTORY|WATCHERS)[\\/]' -and $_.Name -notlike '.*.tmp' })
+    Where-Object { $_.FullName.Substring($root.Length) -notmatch '^[\\/]((HISTORY|WATCHERS)[\\/]|EXCHANGE[\\/]\.publish\.lock$)' -and $_.Name -notlike '.*.tmp' })
 foreach ($file in $files) {
     $owner = try { (Get-Acl -LiteralPath $file.FullName).Owner } catch { '' }
     if ($owner -notmatch $OwnerPattern) { continue }

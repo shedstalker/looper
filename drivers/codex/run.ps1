@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+#requires -Version 7
 <#
 .SYNOPSIS
   Run a Looper role with the Codex CLI (`codex exec`), one run per due item.
@@ -9,14 +10,18 @@
   pwsh -File drivers/codex/run.ps1 -Loop C:\work\app\.looper -Role worker
   pwsh -File drivers/codex/run.ps1 -Loop C:\work\app\.looper -Local qwen3.8:27b     # local model via Ollama
 
-  Reviewer: working root = the task folder (the only writable place); it reads the project.
-  Worker:   working root = the project, plus write access to the task folder.
+  Reviewer: working root = the task folder (the only writable place with the default
+  workspace-write sandbox); it reads the project. -Sandbox config keeps the caller's access settings.
+  Worker:   working root = the project, plus write access to the task folder (under -Sandbox
+            config the caller grants it, on fresh and resumed runs alike).
   -Session resume continues one Codex session across handoffs (cold start if it is gone).
   -Local <model> runs the same Codex agent on a local Ollama model (--oss), always -Session fresh.
-  -Extra:"-c key=value" passes anything else to codex, on fresh and resumed runs alike (resume
-  accepts -c/-m but not --add-dir). workspace-write keeps .git read-only, so a sandboxed Codex
+  -Extra:"-c key=value" passes extra options on fresh and resumed runs (quoting limits:
+  drivers/README.md; resume accepts -c/-m but not --add-dir). workspace-write keeps .git read-only, so a sandboxed Codex
   worker cannot commit (see README); -Sandbox danger-full-access lifts
   that - your security decision.
+  -Sandbox config uses the caller's Codex profile/config (e.g. a credential-deny profile).
+  The caller must make the task folder writable for the reviewer/worker.
 #>
 [CmdletBinding()]
 param(
@@ -26,10 +31,11 @@ param(
     [string]$Effort = '',   # passed through; Codex validates (e.g. low ... xhigh, max, ultra, per model)
     [ValidateSet('fresh', 'resume')][string]$Session = 'resume',
     [string]$Local,
-    [ValidateSet('read-only', 'workspace-write', 'danger-full-access')][string]$Sandbox = 'workspace-write',
+    [ValidateSet('read-only', 'workspace-write', 'danger-full-access', 'config')][string]$Sandbox = 'workspace-write',
     [string]$Codex,
     [string]$Extra = '',
-    [int]$AttemptTimeoutMinutes = 60,
+    [double]$AttemptTimeoutMinutes = 60,
+    [double]$IdleExitMinutes = 0,
     [int]$MaxFailures = 3,
     [switch]$Show,
     [switch]$Once
@@ -43,6 +49,11 @@ if (-not $Codex) {
         $Codex = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'OpenAI/Codex/bin/*/codex.exe') -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
     }
+    if (-not $Codex -and -not $IsWindows) {
+        foreach ($candidate in @((Join-Path $HOME '.local/bin/codex'), (Join-Path $HOME '.npm-global/bin/codex'))) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $Codex = $candidate; break }
+        }
+    }
     if (-not $Codex) { throw 'codex CLI not found; pass -Codex <path>.' }
 }
 
@@ -54,19 +65,26 @@ if ($Local) {
     if ($PSBoundParameters['Session'] -eq 'resume') { Write-Warning '-Local runs with -Session fresh: codex exec resume cannot select the local provider.' }
     $Session = 'fresh'; $Model = $Local
 }
-$fresh = @('exec', '--sandbox', $Sandbox) + $(if ($Local) { @('--oss', '--local-provider', 'ollama') } else { @() })
+$fresh = @('exec') + $(if ($Sandbox -ne 'config') { @('--sandbox', $Sandbox) } else { @() }) + $(if ($Local) { @('--oss', '--local-provider', 'ollama') } else { @() })
 if ($Model) { $common += @('--model', $Model) }
 if ($Effort) { $common += @('-c', "model_reasoning_effort=$Effort") }
 # -Extra reaches fresh and resumed runs, so use options `codex exec resume` accepts (-c, -m, ...).
-$common += @([regex]::Matches($Extra, '"([^"]*)"|''([^'']*)''|(\S+)') | ForEach-Object { ($_.Groups[1..3] | Where-Object Success | Select-Object -First 1).Value })
+$extraArgs = @([regex]::Matches($Extra, '"([^"]*)"|''([^'']*)''|(\S+)') | ForEach-Object { ($_.Groups[1..3] | Where-Object Success | Select-Object -First 1).Value })
 
-$fresh += $common
-$resume = @('exec', 'resume') + $common + @('-c', "sandbox_mode=$Sandbox")
+$fresh += $common + $extraArgs
+$resume = @('exec', 'resume') + $common
 if ($Role -eq 'reviewer') { $fresh += @('--cd', '{LOOP}') }
 else {
-    $fresh += @('--cd', '{PROJECT}', '--add-dir', '{LOOP}')
-    $resume += @('-c', "sandbox_workspace_write.writable_roots=['{LOOP}']")
+    $fresh += @('--cd', '{PROJECT}')
+    if ($Sandbox -ne 'config') {   # config: the caller grants the task folder, on fresh and resumed runs alike
+        $fresh += @('--add-dir', '{LOOP}')
+        # Encode the actual absolute path before placeholder expansion: TOML basic strings escape \ and ".
+        $loopToml = [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location).ProviderPath, $Loop)).Replace('\', '\\').Replace('"', '\"')
+        $resume += @('-c', ('sandbox_workspace_write.writable_roots=["' + $loopToml + '"]'))
+    }
 }
+$resume += $extraArgs           # caller config overrides the driver's writable roots
+if ($Sandbox -ne 'config') { $resume += @('-c', "sandbox_mode=$Sandbox") }
 $fresh += '-'                   # prompt on stdin
 $resume += @('{SESSION}', '-')
 
@@ -75,12 +93,12 @@ $resume += @('{SESSION}', '-')
 $reownScript = Join-Path $PSScriptRoot 'reown.ps1'
 $reown = { param([string]$Folder) & $reownScript -Folder $Folder }.GetNewClosure()
 
-$requested = (@("model=$(if ($Model) { $Model } else { '(codex default)' })", "effort=$(if ($Effort) { $Effort } else { '(codex default)' })", "sandbox=$Sandbox") + $(if ($Local) { 'provider=ollama' } else { @() })) -join ' '
+$requested = (@("model=$(if ($Model) { $Model } else { '(codex default)' })", "effort=$(if ($Effort) { $Effort } else { '(codex default)' })", "sandbox=$Sandbox$(if ($Sandbox -eq 'config') { ' (caller)' })") + $(if ($Local) { 'provider=ollama' } else { @() })) -join ' '
 & (Join-Path $PSScriptRoot '../generic/agent-loop.ps1') -Loop $Loop -Role $Role -Exe $Codex `
     -Arguments $fresh -ResumeArguments $resume -Session $Session `
     -SessionPattern '(?m)^session id: ([0-9a-f-]+)' -ResumeFailurePattern 'no rollout found|thread/resume failed' `
     -Requested $requested -Report 'model=(?m)^model: (\S+)', 'effort=(?m)^reasoning effort: (\S+)', 'provider=(?m)^provider: (\S+)', 'sandbox=(?m)^sandbox: (\S+)', 'tokens=(?m)^tokens used\s*\r?\n\s*([\d,]+)' `
     -AttachHint 'codex resume {SESSION}' -BeforeAttempt $reown `
     -WorkingDirectory $(if ($Role -eq 'reviewer') { 'LOOP' } else { 'PROJECT' }) `
-    -AttemptTimeoutMinutes $AttemptTimeoutMinutes -MaxFailures $MaxFailures -Show:$Show -Once:$Once
+    -AttemptTimeoutMinutes $AttemptTimeoutMinutes -IdleExitMinutes $IdleExitMinutes -MaxFailures $MaxFailures -Show:$Show -Once:$Once
 exit $LASTEXITCODE

@@ -10,7 +10,7 @@
 #
 # Never calls a model, never edits source, never judges work. Everything is derived from the
 # files (see docs/contract.md). wait exit codes: 0 due, 2 done, 3 timed out (wait again).
-# Needs: sh, cp, mv, awk, grep, sort, cmp, sha256sum or shasum. Options also accept the
+# Needs: sh, cp, mv, awk, grep, sort, cmp, od, sha256sum or shasum. Options also accept the
 # PowerShell spellings (-Task, -Project, -Draft, -Attach, -For, -TimeoutMinutes, -PollSeconds).
 set -u
 MARKER='<!-- looper:template -->'
@@ -19,8 +19,8 @@ LOOPER_HOME=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 die() { printf 'LOOPER ERROR: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 sha() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -c1-64
-    else shasum -a 256 "$1" | cut -c1-64; fi
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -c1-64
+    else shasum -a 256 < "$1" | cut -c1-64; fi
 }
 
 T=$(mktemp -d 2>/dev/null || mktemp -d -t looper) || die 'cannot create a temp folder'
@@ -52,7 +52,7 @@ known_list() {
     for f in "$HIST"/*_HANDOFF.md; do
         [ -f "$f" ] || continue
         num=${f##*/}; num=${num%_HANDOFF.md}
-        case $num in '' | *[!0-9]*) continue ;; esac
+        case $num in '' | *[!0123456789]*) continue ;; esac   # ASCII digits in any locale
         printf '%s %s\n' "$(expr "$num" + 0)" "$(sha "$f")" >> "$T/known.u"
     done
     sort -n "$T/known.u" > "$T/known"
@@ -63,33 +63,30 @@ known_list() {
 BOM=$(printf '\357\273\277')
 
 # Soft format: "Verdict: PASS", "**Verdict:** repair", or a Verdict heading with the word below it.
+# The two searches are looper.ps1's Get-Verdict regexes over the whole text, in the same order
+# and with the same ASCII grammar (LC_ALL=C: tolower folds only A-Z): "\n" stands for (?m)^,
+# ([^a-z0-9_]|$) for (?![a-z0-9_]).
 verdict() {
-    awk -v bom="$BOM" '
+    LC_ALL=C awk -v bom="$BOM" '
     NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) }
-    function word(s) {
-        if (s ~ /^pass([^a-z0-9_]|$)/) return "PASS"
-        if (s ~ /^repair([^a-z0-9_]|$)/) return "REPAIR"
-        if (s ~ /^blocked([^a-z0-9_]|$)/) return "BLOCKED"
-        return ""
-    }
-    { l = tolower($0); sub(/\r$/, "", l) }
-    pending { if (l ~ /^[ \t]*$/) next; sub(/^[ \t>*_#`-]*/, "", l); w = word(l); if (w != "") { print w; exit } pending = 0 }
-    l ~ /^[ \t>*_#-]*verdict/ {
-        rest = l; sub(/^[ \t>*_#-]*verdict/, "", rest)
-        r = rest; sub(/^[ \t*_]*[:=-]?[ \t*_`]*/, "", r); w = word(r); if (w != "") { print w; exit }
-        if (rest ~ /^[ \t*_:]*$/) pending = 1
+    { t = t "\n" tolower($0) }
+    END {
+        if (!match(t, /\n[ \t\r\n\f\v>*_#-]*verdict[ \t\r\n\f\v*_]*[-:=]?[ \t\r\n\f\v*_`]*(pass|repair|blocked)([^a-z0-9_]|$)/) &&
+            !match(t, /\n[ \t\r\n\f\v>*_#-]*verdict[ \t\r\n\f\v*_:]*\r?\n([ \t]*\r?\n)*[ \t\r\n\f\v>*_#`-]*(pass|repair|blocked)([^a-z0-9_]|$)/)) exit
+        s = substr(t, RSTART, RLENGTH); sub(/[^a-z]$/, "", s); match(s, /(pass|repair|blocked)$/)
+        print toupper(substr(s, RSTART))
     }' "$1"
 }
 
 # report_sha FILE: the final report's hash the handoff names (the last such line), or nothing.
 report_sha() {
-    sed "1s/^$BOM//" "$1" | sed -n 's/^Final report: `FINAL_REPORT\.md`, sha256 \([0-9a-f]\{64\}\)[[:space:]]*$/\1/p' | tail -n 1
+    sed "1s/^$BOM//" "$1" | LC_ALL=C sed -n 's/^Final report: `FINAL_REPORT\.md`, sha256 \([0-9a-f]\{64\}\)[[:space:]]*$/\1/p' | tail -n 1
 }
 
 # Hash prefixes on lines whose label (text before the first colon) says "handoff" but not
 # previous/prior/earlier/old/last. Printed lower-case, one per line.
 handoff_tokens() {
-    awk -v bom="$BOM" '
+    LC_ALL=C awk -v bom="$BOM" '
     function wc(c) { return c ~ /[A-Za-z0-9_]/ }
     NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) }
     {
@@ -193,29 +190,41 @@ attach_files() {
     rm -rf "$T/att"; mkdir "$T/att"; : > "$T/att.lines"
     old_ifs=$IFS; nl='
 '
-    IFS=$nl
+    IFS=$nl; set -f   # names are literal: no glob expansion
     for a in $ATTACH; do
         if [ -f "$a" ]; then list=$a; else list=$(printf '%s' "$a" | tr ',' '\n'); fi
         for p in $list; do
             [ -f "$p" ] || die "attachment not found (files only): $p"
             name=$(basename -- "$p")
             [ -e "$T/att/$name" ] && die "two attachments are named $name; rename one."
-            cp "$p" "$T/att/$name" || die "could not read $p"
+            cp -- "$p" "$T/att/$name" || die "could not read $p"
             printf -- '- `%s`: %s bytes, sha256 %s\n' "$name" "$(wc -c < "$T/att/$name" | tr -d ' ')" "$(sha "$T/att/$name")" >> "$T/att.lines"
         done
     done
-    IFS=$old_ifs
+    IFS=$old_ifs; set +f
     [ -z "$(tail -c 1 "$T/d")" ] || printf '\n' >> "$T/d"   # end the text with exactly one blank line
     printf '\nAttachments (snapshots in `HISTORY/<number>_attachments/`, <number> being this handoff'"'"'s; review those, not the originals):\n' >> "$T/d"
     cat "$T/att.lines" >> "$T/d"
 }
 
 cmd_publish() {
+    # The publish lock makes these leftovers safe to remove after an interrupted publish.
+    for f in "$HIST"/.*.tmp; do
+        [ -f "$f" ] || continue
+        rm -f "$f" || die "could not remove stale publish temp $f"
+    done
     case $KIND in handoff) NAME=HANDOFF ;; review) NAME=REVIEW ;; *) die 'publish needs a kind: handoff or review' ;; esac
     target="$EXCH/$NAME.md"; default="$EXCH/$NAME.next.md"; draft=${DRAFT:-$default}
     [ -f "$draft" ] || die "no draft at $draft. Write the $KIND there first."
+    # The default draft however it is spelled (./EXCHANGE/..., a relative path): only it is removed after
+    # publishing. Physical paths on both sides (macOS /var is /private/var); bytes, so case never matches loosely.
+    dd=$(CDPATH='' cd -- "$(dirname -- "$draft")" 2>/dev/null && pwd -P) && ed=$(CDPATH='' cd -- "$EXCH" && pwd -P) &&
+        [ "$dd/${draft##*/}" = "$ed/$NAME.next.md" ] && draft=$default
     [ -s "$draft" ] || die "draft $draft is empty."
     cp "$draft" "$T/d"
+    case $(od -An -tx1 -N2 "$T/d" | tr -d ' \n') in
+        fffe | feff) die "draft $draft is UTF-16; save it as UTF-8. Nothing was published." ;;
+    esac
     grep -qF "$MARKER" "$T/d" && die "draft still contains the template marker $MARKER - write the real $KIND."
     if [ -n "$ATTACH" ]; then
         [ "$KIND" = handoff ] || die '-Attach is for handoffs only.'
@@ -244,8 +253,18 @@ cmd_publish() {
         if [ -n "$last" ] && [ "${last#* }" = "$D" ]; then num=${last%% *}; restoring=yes
         else num=$(awk 'BEGIN { m = 0 } $1 > m { m = $1 } END { print m + 1 }' "$T/known"); fi
         num=$(printf '%03d' "$num")
+        # HISTORY is append-only: an existing file is only ever rewritten with its own bytes (a restore). The file
+        # system may equate a name the scan reads differently (001_HANDOFF.MD on Windows or macOS) with this one:
+        # never overwrite it, nor take its snapshot for an orphan.
+        if [ -e "$HIST/${num}_HANDOFF.md" ] && { [ ! -f "$HIST/${num}_HANDOFF.md" ] || [ "$(sha "$HIST/${num}_HANDOFF.md")" != "$D" ]; }; then
+            die "$HIST/${num}_HANDOFF.md already exists with other content; rename or remove it. Nothing was published."
+        fi
         if [ -n "$ATTACH" ]; then
             adir="$HIST/${num}_attachments"
+            if [ -d "$adir" ] && ! awk -v n="$num" '$1 == n + 0 { f = 1 } END { exit !f }' "$T/known"; then
+                # No recorded handoff (by number, as HISTORY is read) owns this snapshot: an interrupted publish left it behind.
+                rm -rf "$adir" || die "could not remove orphan attachment snapshot $adir"
+            fi
             if [ -e "$adir" ]; then
                 # Restoring the latest handoff (its EXCHANGE copy was lost): reuse its snapshot, but
                 # only if it holds exactly these files, byte for byte. Never touch it otherwise.
@@ -305,33 +324,82 @@ cmd_wait() {
 }
 
 # Durable record: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md + REVIEW.md, HISTORY/, FINAL_REPORT,
-# WATCHERS/README.md and WATCHERS/*.log. Everything else below is disposable runtime state.
+# WATCHERS/README.md, *.lock and *.log. Everything else below is disposable runtime state.
 cmd_clean() {
-    for lock in "$ROOT"/WATCHERS/*.lock; do
-        [ -f "$lock" ] || continue
-        held="a driver is running (${lock##*/} is held); stop it before cleaning."
+    if [ "${LOOPER_CLEAN_LOCKED:-}" != 1 ]; then
+        [ -d "$ROOT/WATCHERS" ] || mkdir -p "$ROOT/WATCHERS" || die "cannot create $ROOT/WATCHERS"
+        # Create both role locks first, so a first-time driver cannot start during deletion; then
+        # list and hold every lock until done (one entry per file, also on a case-insensitive volume).
+        for role in worker reviewer; do
+            ( : >> "$ROOT/WATCHERS/$role.lock" ) 2>/dev/null || die "a driver is running ($role.lock is held); stop it before cleaning."
+        done
+        set --
+        for lock in "$ROOT"/WATCHERS/*.lock "$ROOT"/WATCHERS/.*.lock "$ROOT"/WATCHERS/.lock; do
+            [ -f "$lock" ] && set -- "$@" "$lock"
+        done
         if command -v flock >/dev/null 2>&1; then
-            flock -n "$lock" true 2>/dev/null || die "$held"
+            # The for-list expands before set replaces the arguments with nested lock holders.
+            first=1
+            for lock in "$@"; do
+                if [ "$first" = 1 ]; then set -- env LOOPER_CLEAN_LOCKED=1 sh "$0" clean "$ROOT"; first=0; fi
+                set -- flock -n "$lock" "$@"
+            done
+            "$@"
         else
             case $(uname -s) in
-                MINGW* | MSYS* | CYGWIN*) ( : >> "$lock" ) 2>/dev/null || die "$held" ;;   # Windows: a held lock cannot be opened
-                *) die "cannot check ${lock##*/} without flock(1); nothing was cleaned. Use looper.ps1 clean (the drivers need PowerShell anyway)." ;;
+                MINGW* | MSYS* | CYGWIN*)
+                    # Perl's open cooperates with Windows share-none handles, as for publish.
+                    perl -MFcntl=:flock -e '
+                        BEGIN { $^F = 1023 }
+                        my ($script, $root, @locks) = @ARGV; my @held;
+                        for my $lock (@locks) {
+                            my $fh;   # declared first: a "my" is not visible until the next statement
+                            open($fh, ">>", $lock) && flock($fh, LOCK_EX|LOCK_NB) or exit 1;
+                            push @held, $fh;
+                        }
+                        $ENV{LOOPER_CLEAN_LOCKED} = 1;
+                        exec "sh", $script, "clean", $root or exit 1;
+                    ' "$0" "$ROOT" "$@"
+                    ;;
+                *)
+                    command -v pwsh >/dev/null 2>&1 || die 'cannot hold driver locks without flock(1) or pwsh; nothing was cleaned.'
+                    cat > "$T/clean.ps1" <<'PS'
+param($Helper, $Root)
+$leases = @()
+try {
+    foreach ($path in $args) { $leases += [IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None') }
+    $env:LOOPER_CLEAN_LOCKED = '1'
+    & sh $Helper clean $Root
+    exit $LASTEXITCODE
+} catch [IO.IOException] { exit 1 }
+finally { foreach ($lease in $leases) { $lease.Dispose() } }
+PS
+                    pwsh -NoProfile -File "$T/clean.ps1" "$0" "$ROOT" "$@"
+                    ;;
             esac
         fi
-    done
+        code=$?
+        [ "$code" -eq 0 ] || die 'a driver is running (a role lock is held), or cleanup failed; stop it before cleaning.'
+        return
+    fi
     : > "$T/junk"
-    for f in "$ROOT"/WATCHERS/* "$ROOT"/WATCHERS/.[!.]* "$ROOT"/EXCHANGE/*.next.md "$ROOT"/EXCHANGE/.*.tmp "$ROOT"/HISTORY/.*.tmp; do
+    for f in "$ROOT"/WATCHERS/* "$ROOT"/WATCHERS/.[!.]* "$ROOT"/WATCHERS/..?* \
+             "$ROOT"/EXCHANGE/* "$ROOT"/EXCHANGE/.[!.]* "$ROOT"/EXCHANGE/..?* "$ROOT"/HISTORY/.[!.]* "$ROOT"/HISTORY/..?*; do
         [ -f "$f" ] || continue
-        case ${f##*/} in README.md | *.log) continue ;; esac
-        case $f in "$ROOT"/WATCHERS/*/*) continue ;; esac
+        name=$(printf '%s' "${f##*/}" | tr 'A-Z' 'a-z')
+        case $f in
+            "$ROOT"/WATCHERS/*) case $name in readme.md | *.log | *.lock) continue ;; esac ;;
+            "$ROOT"/EXCHANGE/*) case $name in *.next.md | .*.tmp) ;; *) continue ;; esac ;;
+            *) case $name in .*.tmp) ;; *) continue ;; esac ;;
+        esac
         rm -f "$f" && printf '%s\n' "${f##*/}" >> "$T/junk"
     done
-    for d in "$ROOT"/WATCHERS/*/; do   # e.g. scratch/
+    for d in "$ROOT"/WATCHERS/*/ "$ROOT"/WATCHERS/.[!.]*/ "$ROOT"/WATCHERS/..?*/; do   # e.g. scratch/
         [ -d "$d" ] || continue
         rm -rf -- "${d%/}" && printf '%s\n' "$(basename -- "$d")" >> "$T/junk"
     done
-    echo "LOOPER cleaned $(grep -c . "$T/junk") runtime file(s): $(paste -sd ',' "$T/junk" | sed 's/,/, /g')"
-    echo 'Kept: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md, EXCHANGE/REVIEW.md, HISTORY/, FINAL_REPORT, WATCHERS/README.md and logs.'
+    printf 'LOOPER cleaned %s runtime file(s): %s\n' "$(grep -c . "$T/junk")" "$(paste -sd ',' "$T/junk" | sed 's/,/, /g')"
+    echo 'Kept: CONTEXT, PLAN, TASK, EXCHANGE/HANDOFF.md, EXCHANGE/REVIEW.md, HISTORY/, FINAL_REPORT, WATCHERS/README.md, driver locks and logs.'
 }
 
 cmd_new() {
@@ -341,13 +409,22 @@ cmd_new() {
         fi
         die "$ROOT already exists and is not empty; Looper never overwrites a folder."
     fi
+    proj=${PROJECT:-$PWD}
+    [ -d "$proj" ] || die "no project folder $proj; nothing was created."
+    proj=$(CDPATH='' cd -- "$proj" && pwd) || die "cannot access project folder $proj"
     mkdir -p "$ROOT" || die "cannot create $ROOT"
     ROOT=$(CDPATH='' cd -- "$ROOT" && pwd)
-    proj=${PROJECT:-$PWD}; proj=$(CDPATH='' cd -- "$proj" && pwd) || die "no project folder $PROJECT"
     task=${TASK:-${proj##*/}}
     cp -R "$LOOPER_HOME/template/." "$ROOT/" || die 'could not copy the template'
     find "$ROOT" -name .gitkeep -exec rm -f {} +
-    L_TASK=$task L_LOOP=$ROOT L_PROJECT=$proj L_HOME=$LOOPER_HOME L_HELPER="$LOOPER_HOME/tools/looper.sh" \
+    context_loop=$ROOT; context_project=$proj; context_home=$LOOPER_HOME
+    case $(uname -s) in
+        MINGW* | MSYS* | CYGWIN*)
+            context_loop=$(cygpath -m "$ROOT") && context_project=$(cygpath -m "$proj") && context_home=$(cygpath -m "$LOOPER_HOME") ||
+                die 'cannot convert task paths to Windows paths with cygpath.'
+            ;;
+    esac
+    L_TASK=$task L_LOOP=$context_loop L_PROJECT=$context_project L_HOME=$context_home \
     L_CREATED=$(date '+%Y-%m-%d %H:%M') awk '
         function put(text, key, value,   i, out) {
             out = ""
@@ -355,7 +432,7 @@ cmd_new() {
             return out text
         }
         { $0 = put($0, "TASK", ENVIRON["L_TASK"]); $0 = put($0, "LOOP", ENVIRON["L_LOOP"]); $0 = put($0, "PROJECT", ENVIRON["L_PROJECT"])
-          $0 = put($0, "LOOPER_HOME", ENVIRON["L_HOME"]); $0 = put($0, "HELPER", ENVIRON["L_HELPER"]); $0 = put($0, "CREATED", ENVIRON["L_CREATED"]); print }
+          $0 = put($0, "LOOPER_HOME", ENVIRON["L_HOME"]); $0 = put($0, "CREATED", ENVIRON["L_CREATED"]); print }
     ' "$ROOT/CONTEXT.md" > "$T/context" && cp "$T/context" "$ROOT/CONTEXT.md"
 
     # Keep the task folder out of the project's commits without touching tracked files.
@@ -364,48 +441,94 @@ cmd_new() {
     # --git-path: the exclude file git reads (in a linked worktree, the main repository's); it may be
     # relative to the folder git ran in, so resolve it there.
     exclude=$(cd "$ROOT" && p=$(git rev-parse --git-path info/exclude 2>/dev/null) &&
-        case $p in /* | [A-Za-z]:/* | [A-Za-z]:'\'*) printf '%s' "$p" ;; *) printf '%s/%s' "$PWD" "$p" ;; esac) || exclude=''
+        case $p in (/* | [A-Za-z]:/* | [A-Za-z]:'\'*) printf '%s' "$p" ;; (*) printf '%s/%s' "$PWD" "$p" ;; esac) || exclude=''
+    # The leading ( on each pattern lets bash 3.2 (macOS /bin/sh) parse a case inside $( ).
     if [ -n "$prefix" ] && [ -n "$exclude" ]; then
-        entry="/$prefix"
+        entry=$(printf '/%s' "$prefix" | sed 's/[][\\*?]/\\&/g; s/ $/\\ /')
         mkdir -p "$(dirname -- "$exclude")"
         grep -qxF "$entry" "$exclude" 2>/dev/null || printf '\n%s\n' "$entry" >> "$exclude"
     fi
 
-    echo "LOOPER created $ROOT"
+    printf 'LOOPER created %s
+' "$ROOT"
     echo ''
     echo 'Worker next: fill PLAN.md and TASK.md (proportionately), then start work.'
     echo 'Give this one-line prompt to an independent reviewer, once:'
     echo ''
-    echo "  You are the REVIEWER for the Looper task at $ROOT. Read $ROOT/CONTEXT.md and follow the reviewer route."
+    printf '  You are the REVIEWER for the Looper task at %s. Read %s/CONTEXT.md and follow the reviewer route.\n' "$ROOT" "$ROOT"
 }
 
-CMD=${1:-help}; [ $# -gt 0 ] && shift
-LOOP=.looper; KIND=''; TASK=''; PROJECT=''; DRAFT=''; ATTACH=''; ATTACH_DIR=''; FOR=''; TIMEOUT=720; POLL=5; pos=0
+parse_args() {
+CMD=$(printf '%s' "${1-help}" | tr 'A-Z' 'a-z'); [ $# -gt 0 ] && shift
+LOOP=.looper; KIND=''; TASK=''; PROJECT=''; DRAFT=''; ATTACH=''; ATTACH_DIR=''; FOR=''; TIMEOUT=720; POLL=30; pos=0; seen=' '
 while [ $# -gt 0 ]; do
     opt=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    # As PowerShell: a value option given twice is refused (only --attach repeats).
+    case $opt in -attach | --attach | [!-]*) ;; *) key=$(printf %s "$opt" | tr -d -); case $seen in *" $key "*) die "$1 given twice" ;; esac; seen="$seen$key " ;; esac
     case $opt in
         -task | --task) TASK=$2; shift 2 ;;
         -project | --project) PROJECT=$2; shift 2 ;;
         -draft | --draft) DRAFT=$2; shift 2 ;;
         -attach | --attach) ATTACH="$ATTACH${ATTACH:+
 }$2"; shift 2 ;;
-        -for | --for) FOR=$2; shift 2 ;;
+        -for | --for) [ -n "$2" ] || die '-For must be worker or reviewer'; FOR=$2; shift 2 ;;
         -timeoutminutes | --timeout-minutes) TIMEOUT=$2; shift 2 ;;
         -pollseconds | --poll-seconds) POLL=$2; shift 2 ;;
         -*) die "unknown option $1" ;;
-        *) if [ $pos -eq 0 ]; then LOOP=$1; else KIND=$1; fi; pos=$((pos + 1)); shift ;;
+        *) case $pos in
+               0) LOOP=$1 ;;
+               1) [ -n "$1" ] || die 'kind must be handoff or review'; KIND=$1 ;;
+               *) die "unexpected argument $1" ;;   # never let a stray word replace the kind
+           esac
+           pos=$((pos + 1)); shift ;;
     esac
 done
+FOR=$(printf '%s' "$FOR" | tr 'A-Z' 'a-z'); KIND=$(printf '%s' "$KIND" | tr 'A-Z' 'a-z')
+case $FOR in '' | worker | reviewer) ;; *) die '-For must be worker or reviewer' ;; esac
+case $KIND in '' | handoff | review) ;; *) die 'kind must be handoff or review' ;; esac
+# One number syntax in both helpers (decimal minutes, whole seconds), checked before awk's -v
+# escape processing sees the values; then the ranges.
+case $TIMEOUT in '' | .* | *. | *.*.* | *[!0-9.]*) TIMEOUT=x ;; esac
+case $POLL in '' | *[!0-9]*) POLL=x ;; esac
+[ "$TIMEOUT" != x ] && [ "$POLL" != x ] && awk -v t="$TIMEOUT" -v p="$POLL" 'BEGIN { exit !(t >= 0.01 && t <= 10080 && p >= 1 && p <= 3600) }' ||
+    die 'TimeoutMinutes must be 0.01..10080; PollSeconds must be a whole number 1..3600.'
+}
+parse_args "$@"
 
 case $CMD in
     new) ROOT=$LOOP; cmd_new; exit 0 ;;
     status | publish | wait | clean) ;;
-    *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    help | -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown command $CMD" ;;
 esac
 [ -d "$LOOP/EXCHANGE" ] || die "$LOOP is not a Looper task folder (no EXCHANGE/). Create one with: looper.sh new <folder>"
 ROOT=$(CDPATH='' cd -- "$LOOP" && pwd)
 HANDOFF="$ROOT/EXCHANGE/HANDOFF.md"; REVIEW="$ROOT/EXCHANGE/REVIEW.md"; FINAL="$ROOT/FINAL_REPORT.md"
 HIST="$ROOT/HISTORY"; EXCH="$ROOT/EXCHANGE"
+if [ "${LOOPER_LOCKED:-}" != 1 ] && { [ "$CMD" = publish ] || [ "$CMD" = clean ]; }; then
+    lock="$EXCH/.publish.lock"   # Persistent: never unlink or replace the locked inode.
+    shell=$(command -v sh); script=$0   # as invoked (cwd is unchanged), so a symlinked helper still works
+    # Unix: flock(1), Perl and .NET share flock(2). Windows: .NET share-none and Perl's open exclude each other.
+    # The re-run helper inherits the locked descriptor, so it holds the lock even if the holder is killed.
+    # Use flock(1) only if it takes -w and -E (util-linux 2.22+; not BusyBox, macOS Homebrew); else Perl.
+    if flock -w 1 -E 75 "$T/probe.lock" true 2>/dev/null; then
+        (exec flock -w 90 -E 75 "$lock" env LOOPER_LOCKED=1 "$shell" "$script" "$@")
+    elif command -v perl >/dev/null 2>&1; then
+        perl -MFcntl=:flock -MTime::HiRes=time,sleep -e '
+            BEGIN { $^F = 1023 }   # keep the lock descriptor open across exec
+            my ($lock, @cmd) = @ARGV; my $end = time + 90; my $fh;
+            until (open($fh, ">>", $lock) && flock($fh, LOCK_EX|LOCK_NB)) {
+                close($fh) if $fh; exit 75 if time >= $end; sleep 0.2;
+            }
+            $ENV{LOOPER_LOCKED} = 1;
+            exec { $cmd[0] } @cmd or exit 1;
+        ' "$lock" "$shell" "$script" "$@"
+    else
+        die 'publish needs flock(1) or perl to serialise writers; nothing was published.'
+    fi
+    code=$?; [ "$code" -ne 75 ] || die 'timed out waiting 90 s for the publish lock; nothing was published.' 75
+    exit "$code"
+fi
 [ -n "$DRAFT" ] && case $DRAFT in /* | [A-Za-z]:/* | [A-Za-z]:'\'*) ;; *) DRAFT="$PWD/$DRAFT" ;; esac   # absolute, including C:\ or C:/
 case $CMD in
     status) cmd_status ;;
